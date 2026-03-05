@@ -29,8 +29,10 @@
 #include <string>
 #include <vector>
 
+#include <nlohmann/json.hpp>
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/int16_multi_array.hpp"
+#include "std_msgs/msg/string.hpp"
 
 using namespace std::chrono_literals;
 
@@ -186,7 +188,13 @@ public:
             this->topic_callback(i, msg);
           }));
       input_buffers_.emplace_back();
+      input_gains_.push_back(1.0f);
     }
+
+    // Dynamic Level Control Subscriber
+    levels_sub_ = this->create_subscription<std_msgs::msg::String>(
+      "levels", 10,
+      std::bind(&MixerNode::levels_callback, this, std::placeholders::_1));
 
     // Timer for mixing loop
     timer_ = this->create_wall_timer(
@@ -214,6 +222,34 @@ private:
     }
   }
 
+  void levels_callback(const std_msgs::msg::String::SharedPtr msg)
+  {
+    try {
+      auto j = nlohmann::json::parse(msg->data);
+      std::lock_guard<std::mutex> lock(mutex_);
+
+      for (int i = 0; i < 8; ++i) {
+        std::string key = "in" + std::to_string(i);
+        if (j.contains(key) && j[key].is_number()) {
+          input_gains_[i] = j[key].get<float>();
+          RCLCPP_INFO(this->get_logger(), "Set gain for in%d to %.2f", i, input_gains_[i]);
+        }
+      }
+
+      if (j.contains("fifo") && j["fifo"].is_number()) {
+        fifo_gain_ = j["fifo"].get<float>();
+        RCLCPP_INFO(this->get_logger(), "Set gain for fifo to %.2f", fifo_gain_);
+      }
+
+      if (j.contains("master") && j["master"].is_number()) {
+        master_gain_ = j["master"].get<float>();
+        RCLCPP_INFO(this->get_logger(), "Set master gain to %.2f", master_gain_);
+      }
+    } catch (const std::exception & e) {
+      RCLCPP_WARN(this->get_logger(), "Failed to parse levels JSON: %s", e.what());
+    }
+  }
+
   void mix_loop()
   {
     std::vector<int32_t> mixed_data(values_per_chunk_, 0);
@@ -224,8 +260,9 @@ private:
       // 1. Collect from ROS topics
       for (int i = 0; i < 8; ++i) {
         size_t to_pull = std::min(input_buffers_[i].size(), static_cast<size_t>(values_per_chunk_));
+        float gain = input_gains_[i];
         for (size_t j = 0; j < to_pull; ++j) {
-          mixed_data[j] += input_buffers_[i].front();
+          mixed_data[j] += static_cast<int32_t>(input_buffers_[i].front() * gain);
           input_buffers_[i].pop_front();
         }
       }
@@ -237,7 +274,7 @@ private:
         if (bytes_read > 0) {
           size_t samples_read = bytes_read / 2;
           for (size_t j = 0; j < samples_read; ++j) {
-            mixed_data[j] += fifo_buffer[j];
+            mixed_data[j] += static_cast<int32_t>(fifo_buffer[j] * fifo_gain_);
           }
         }
       }
@@ -246,7 +283,7 @@ private:
     // Clipping and conversion back to int16
     std::vector<int16_t> final_data(values_per_chunk_);
     for (int i = 0; i < values_per_chunk_; ++i) {
-      int32_t val = mixed_data[i];
+      int32_t val = static_cast<int32_t>(mixed_data[i] * master_gain_);
       if (val > 32767) {
         val = 32767;
       } else if (val < -32768) {
@@ -293,8 +330,12 @@ private:
 
   std::vector<rclcpp::Subscription<std_msgs::msg::Int16MultiArray>::SharedPtr> subs_;
   std::vector<std::deque<int16_t>> input_buffers_;
+  std::vector<float> input_gains_;
+  float fifo_gain_ = 1.0f;
+  float master_gain_ = 1.0f;
   std::mutex mutex_;
 
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr levels_sub_;
   rclcpp::Publisher<std_msgs::msg::Int16MultiArray>::SharedPtr pub_;
   rclcpp::TimerBase::SharedPtr timer_;
 };

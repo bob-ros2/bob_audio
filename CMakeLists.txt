@@ -9,6 +9,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(nlohmann_json REQUIRED)
 
 # Mixer Node
 add_executable(mixer src/mixer_node.cpp)
@@ -20,6 +21,7 @@ ament_target_dependencies(mixer
   rclcpp
   std_msgs
 )
+target_link_libraries(mixer nlohmann_json::nlohmann_json)
 
 # Convert Node
 add_executable(convert src/convert_node.cpp)
