@@ -1,4 +1,4 @@
-# bob_audio
+# ROS Package [bob_audio](https://github.com/bob-ros2/bob_audio)
 
 A high-performance ROS 2 package for audio mixing and conversion, optimized for Docker and headless environments. It allows combining multiple audio sources (TTS, Music, SFX) into a single master stream without the need for a full audio server like PulseAudio or JACK.
 
