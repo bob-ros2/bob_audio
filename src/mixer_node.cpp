@@ -79,7 +79,7 @@ class MixerNode : public rclcpp::Node
 {
 public:
   MixerNode()
-  : Node("mixer_node")
+  : Node("mixer")
   {
     // Ignore SIGPIPE to prevent crashing if a pipe reader disconnects
     signal(SIGPIPE, SIG_IGN);
@@ -208,6 +208,7 @@ private:
   void topic_callback(int index, const std_msgs::msg::Int16MultiArray::SharedPtr msg)
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    RCLCPP_DEBUG(this->get_logger(), "Received %zu samples on topic in%d", msg->data.size(), index);
     for (const auto & val : msg->data) {
       input_buffers_[index].push_back(val);
     }
@@ -271,6 +272,13 @@ private:
     // 3. Stdout Output (FFmpeg pipe)
     if (enable_stdout_output_) {
       write(STDOUT_FILENO, final_data.data(), values_per_chunk_ * 2);
+    }
+
+    static int loop_count = 0;
+    if (++loop_count % 100 == 0) {
+      RCLCPP_DEBUG(
+        this->get_logger(), "Mixing... Buffer in0: %zu samples",
+        input_buffers_[0].size());
     }
   }
 

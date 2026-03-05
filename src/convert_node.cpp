@@ -75,7 +75,7 @@ class ConvertNode : public rclcpp::Node
 {
 public:
   ConvertNode()
-  : Node("convert_node")
+  : Node("convert")
   {
     auto descriptor = rcl_interfaces::msg::ParameterDescriptor();
 
@@ -167,26 +167,37 @@ private:
     size_t chunk_bytes = values_per_chunk_ * 2;
 
     while (rclcpp::ok() && running_) {
-      ssize_t bytes_read = read(input_fd_, buffer.data(), chunk_bytes);
+      size_t total_read = 0;
+      uint8_t * ptr = reinterpret_cast<uint8_t *>(buffer.data());
 
-      if (bytes_read > 0) {
-        auto msg = std_msgs::msg::Int16MultiArray();
-        size_t samples = bytes_read / 2;
-        msg.data.assign(buffer.begin(), buffer.begin() + samples);
-        pub_->publish(msg);
-      } else if (bytes_read == 0) {
-        // EOF, might happen on pipe. Wait a bit or exit?
-        // On FIFO, read 0 means no writer. We wait.
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      } else {
-        // Error or EAGAIN
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      // Read until we have a full chunk or an error occurs
+      while (total_read < chunk_bytes && rclcpp::ok() && running_) {
+        ssize_t n = read(input_fd_, ptr + total_read, chunk_bytes - total_read);
+        if (n > 0) {
+          total_read += n;
+        } else if (n == 0) {
+          // EOF
+          std::this_thread::sleep_for(std::chrono::milliseconds(10));
+          if (total_read == 0) {goto next_loop;} else {break;}
         } else {
+          if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+          }
           RCLCPP_ERROR(this->get_logger(), "Read error: %s", strerror(errno));
-          break;
+          return;
         }
       }
+
+      if (total_read > 0) {
+        auto msg = std_msgs::msg::Int16MultiArray();
+        msg.data.assign(buffer.begin(), buffer.begin() + (total_read / 2));
+        pub_->publish(msg);
+        RCLCPP_DEBUG(this->get_logger(), "Published %zu samples to ROS topic", total_read / 2);
+      }
+
+next_loop:
+      continue;
     }
   }
 
