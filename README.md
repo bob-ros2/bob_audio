@@ -36,17 +36,17 @@ The mixer node takes multiple audio inputs and aggregates them into one master o
 
 #### Parameters & Environment Variables
 
-| Parameter | Type | Default | Env Var | Description |
-| :--- | :--- | :--- | :--- | :--- |
-| `enable_fifo_output` | bool | `false` | `MIXER_ENABLE_FIFO_OUTPUT` | Write to FIFO |
-| `output_fifo` | string | `/tmp/audio_master_pipe`| `MIXER_OUTPUT_FIFO` | Path to master FIFO |
-| `enable_stdout_output`| bool | `false` | `MIXER_ENABLE_STDOUT_OUTPUT`| Write to stdout |
-| `enable_topic_output` | bool | `true` | `MIXER_ENABLE_TOPIC_OUTPUT` | Publish to `out` topic |
-| `enable_fifo_input` | bool | `false` | `MIXER_ENABLE_FIFO_INPUT` | Read from an input FIFO |
-| `input_fifo` | string | `/tmp/audio_pipe` | `MIXER_INPUT_FIFO` | Path to input FIFO |
-| `sample_rate` | int | `44100` | `MIXER_SAMPLE_RATE` | Sample rate in Hz |
-| `channels` | int | `2` | `MIXER_CHANNELS` | Number of channels |
-| `chunk_ms` | int | `20` | `MIXER_CHUNK_MS` | Delay per chunk |
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `enable_fifo_output` | bool | `false` | Enable writing mixed audio to a FIFO pipe (Env: `MIXER_ENABLE_FIFO_OUTPUT`) |
+| `output_fifo` | string | `/tmp/audio_master_pipe`| Path to the output FIFO pipe (Env: `MIXER_OUTPUT_FIFO`) |
+| `enable_stdout_output`| bool | `false` | Enable writing mixed audio to stdout for piping (Env: `MIXER_ENABLE_STDOUT_OUTPUT`) |
+| `enable_topic_output` | bool | `true` | Enable publishing mixed audio to a ROS topic (Env: `MIXER_ENABLE_TOPIC_OUTPUT`) |
+| `enable_fifo_input` | bool | `false` | Enable reading audio from an input FIFO pipe (Env: `MIXER_ENABLE_FIFO_INPUT`) |
+| `input_fifo` | string | `/tmp/audio_pipe` | Path to the input FIFO pipe (Env: `MIXER_INPUT_FIFO`) |
+| `sample_rate` | int | `44100` | Audio sample rate (Env: `MIXER_SAMPLE_RATE`) |
+| `channels` | int | `2` | Number of audio channels (Env: `MIXER_CHANNELS`) |
+| `chunk_ms` | int | `20` | Chunk size in milliseconds (Env: `MIXER_CHUNK_MS`) |
 
 #### Topics
 
@@ -59,14 +59,14 @@ Converts external raw audio streams into ROS topics.
 
 #### Parameters & Environment Variables
 
-| Parameter | Type | Default | Env Var | Description |
-| :--- | :--- | :--- | :--- | :--- |
-| `enable_fifo` | bool | `false` | `CONVERT_ENABLE_FIFO` | Read from FIFO |
-| `input_fifo` | string | `/tmp/audio_pipe` | `CONVERT_INPUT_FIFO` | Path to input FIFO |
-| `enable_stdin` | bool | `false` | `CONVERT_ENABLE_STDIN` | Read from stdin |
-| `sample_rate` | int | `44100` | `CONVERT_SAMPLE_RATE` | Sample rate in Hz |
-| `channels` | int | `2` | `CONVERT_CHANNELS` | Number of channels |
-| `chunk_ms` | int | `20` | `CONVERT_CHUNK_MS` | Chunk size |
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `enable_fifo` | bool | `false` | Enable reading from an input FIFO (Env: `CONVERT_ENABLE_FIFO`) |
+| `input_fifo` | string | `/tmp/audio_pipe` | Path to the input FIFO (Env: `CONVERT_INPUT_FIFO`) |
+| `enable_stdin` | bool | `false` | Enable reading from stdin (Pipe) (Env: `CONVERT_ENABLE_STDIN`) |
+| `sample_rate` | int | `44100` | Audio sample rate (Env: `CONVERT_SAMPLE_RATE`) |
+| `channels` | int | `2` | Number of audio channels (Env: `CONVERT_CHANNELS`) |
+| `chunk_ms` | int | `20` | Chunk size in milliseconds per message (Env: `CONVERT_CHUNK_MS`) |
 
 #### Topics
 
