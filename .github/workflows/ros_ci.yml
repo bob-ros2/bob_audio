@@ -26,6 +26,9 @@ jobs:
       - name: Build and Test
         run: |
           . /opt/ros/humble/setup.sh
+          mkdir -p ws/src
+          ln -s $(pwd) ws/src/bob_audio
+          cd ws
           colcon build --packages-select bob_audio
           colcon test --packages-select bob_audio --event-handlers console_direct+
           colcon test-result --all --verbose
