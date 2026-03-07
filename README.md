@@ -9,7 +9,7 @@ A high-performance ROS 2 package for audio mixing and conversion, optimized for 
 - **Real-time Volume Control**: Change gain for each input or master via JSON.
 - **Docker Friendly**: No hardware audio device requirements.
 - **Multiple Output Sinks**: Stream to ROS topics, FIFO pipes, or directly to stdout (for FFmpeg).
-- **Audio Conversion**: Easily convert between raw pipes/stdin and ROS messages.
+- **Audio Conversion**: Bidirectional conversion between raw streams and ROS messages.
 
 ## Installation & Build
 
@@ -84,19 +84,16 @@ Bidirectional conversion between raw audio streams (FIFO/Pipe/stdin) and ROS mes
 
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `enable_fifo` | bool | `false` | Read raw bytes from an input FIFO (Env: `CONVERT_ENABLE_FIFO`) |
-| `input_fifo` | string | `/tmp/audio_pipe` | Path to the input FIFO (Env: `CONVERT_INPUT_FIFO`) |
-| `enable_stdin` | bool | `false` | Read raw bytes from stdin (Env: `CONVERT_ENABLE_STDIN`) |
-| `enable_fifo_output`| bool | `false` | Write ROS messages to an output FIFO (Env: `CONVERT_ENABLE_FIFO_OUTPUT`) |
-| `output_fifo` | string | `/tmp/audio_out_pipe`| Path to the output FIFO (Env: `CONVERT_OUTPUT_FIFO`) |
+| `mode` | string | `fifo_to_ros` | Mode: `fifo_to_ros`, `stdin_to_ros`, or `ros_to_fifo` (Env: `CONVERT_MODE`) |
+| `fifo_path` | string | `/tmp/audio_pipe`| Path to the FIFO pipe (Env: `CONVERT_FIFO_PATH`) |
 | `sample_rate` | int | `44100` | Audio sample rate in Hz (Env: `CONVERT_SAMPLE_RATE`) |
 | `channels` | int | `2` | Number of audio channels (Env: `CONVERT_CHANNELS`) |
 | `chunk_ms` | int | `20` | Chunk size in ms per ROS message (Env: `CONVERT_CHUNK_MS`) |
 
 #### Topics
 
-- **Subscribers**: `in` (`std_msgs/msg/Int16MultiArray`): Only active if `enable_fifo_output` is true.
-- **Publishers**: `out` (`std_msgs/msg/Int16MultiArray`): Mixed master output.
+- **Subscribers**: `in` (`std_msgs/msg/Int16MultiArray`): Active if mode is `ros_to_fifo`.
+- **Publishers**: `out` (`std_msgs/msg/Int16MultiArray`): Active if mode is `*_to_ros`.
 
 ## Usage Examples
 
@@ -104,18 +101,7 @@ Bidirectional conversion between raw audio streams (FIFO/Pipe/stdin) and ROS mes
 
 ```bash
 ffmpeg -re -stream_loop -1 -i music.mp3 -f s16le -ar 44100 -ac 2 pipe:1 | \
-  ros2 run bob_audio convert --ros-args -p enable_stdin:=true -r out:=/bob/audio_music
-```
-
-### Mixing TTS and Music for a Twitch Stream
-
-```bash
-# Start the mixer, remapping inputs to specific sources
-ros2 run bob_audio mixer --ros-args \
-  -r in0:=/bob/audio_speech \
-  -r in1:=/bob/audio_music \
-  -p enable_fifo_output:=true \
-  -p output_fifo:=/tmp/audio_master_pipe
+  ros2 run bob_audio convert --ros-args -p mode:=stdin_to_ros -r out:=/bob/audio_music
 ```
 
 ### Listening to ROS audio (e.g. from Mixer) via ffplay
@@ -124,14 +110,14 @@ ros2 run bob_audio mixer --ros-args \
 # Convert ROS topic to FIFO
 ros2 run bob_audio convert --ros-args \
   -r in:=/out \
-  -p enable_fifo_output:=true \
-  -p output_fifo:=/tmp/audio_ffplay
+  -p mode:=ros_to_fifo \
+  -p fifo_path:=/tmp/audio_ffplay
 
 # Play the FIFO
 ffplay -f s16le -ar 44100 -ac 2 -i /tmp/audio_ffplay
 ```
 
-### Piping directly into FFmpeg
+### Piping Mixer directly into FFmpeg
 
 ```bash
 export MIXER_ENABLE_STDOUT_OUTPUT=true

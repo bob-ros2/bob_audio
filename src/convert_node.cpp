@@ -82,42 +82,20 @@ public:
 
     auto descriptor = rcl_interfaces::msg::ParameterDescriptor();
 
-    // --- Input Configuration (FIFO/stdin -> ROS) ---
+    // --- Mode Configuration ---
     descriptor.description =
-      "Enable reading from an input FIFO "
-      "(Default: false, Env: CONVERT_ENABLE_FIFO).";
-    bool enable_fifo = this->declare_parameter(
-      "enable_fifo",
-      get_env("CONVERT_ENABLE_FIFO", false), descriptor);
+      "Conversion mode: 'fifo_to_ros', 'stdin_to_ros', or 'ros_to_fifo' "
+      "(Default: fifo_to_ros, Env: CONVERT_MODE).";
+    std::string mode = this->declare_parameter(
+      "mode",
+      get_env("CONVERT_MODE", std::string("fifo_to_ros")), descriptor);
 
     descriptor.description =
-      "Path to the input FIFO "
-      "(Default: /tmp/audio_pipe, Env: CONVERT_INPUT_FIFO).";
-    std::string input_fifo_path = this->declare_parameter(
-      "input_fifo",
-      get_env("CONVERT_INPUT_FIFO", std::string("/tmp/audio_pipe")), descriptor);
-
-    descriptor.description =
-      "Enable reading from stdin (Pipe) "
-      "(Default: false, Env: CONVERT_ENABLE_STDIN).";
-    bool enable_stdin = this->declare_parameter(
-      "enable_stdin",
-      get_env("CONVERT_ENABLE_STDIN", false), descriptor);
-
-    // --- Output Configuration (ROS -> FIFO) ---
-    descriptor.description =
-      "Enable writing ROS messages to an output FIFO "
-      "(Default: false, Env: CONVERT_ENABLE_FIFO_OUTPUT).";
-    bool enable_fifo_output = this->declare_parameter(
-      "enable_fifo_output",
-      get_env("CONVERT_ENABLE_FIFO_OUTPUT", false), descriptor);
-
-    descriptor.description =
-      "Path to the output FIFO "
-      "(Default: /tmp/audio_out_pipe, Env: CONVERT_OUTPUT_FIFO).";
-    std::string output_fifo_path = this->declare_parameter(
-      "output_fifo",
-      get_env("CONVERT_OUTPUT_FIFO", std::string("/tmp/audio_out_pipe")), descriptor);
+      "Path to the FIFO pipe (used for fifo_to_ros and ros_to_fifo) "
+      "(Default: /tmp/audio_pipe, Env: CONVERT_FIFO_PATH).";
+    std::string fifo_path = this->declare_parameter(
+      "fifo_path",
+      get_env("CONVERT_FIFO_PATH", std::string("/tmp/audio_pipe")), descriptor);
 
     // --- Audio Format ---
     descriptor.description =
@@ -143,37 +121,34 @@ public:
 
     values_per_chunk_ = (sample_rate * chunk_ms / 1000) * channels;
 
-    // --- Setup Input (FIFO/stdin -> ROS) ---
-    pub_ = this->create_publisher<std_msgs::msg::Int16MultiArray>("out", 10);
-
-    if (enable_fifo) {
-      mkfifo(input_fifo_path.c_str(), 0666);
-      input_fd_ = open(input_fifo_path.c_str(), O_RDONLY | O_NONBLOCK);
+    // --- Mode Execution ---
+    if (mode == "fifo_to_ros") {
+      pub_ = this->create_publisher<std_msgs::msg::Int16MultiArray>("out", 10);
+      mkfifo(fifo_path.c_str(), 0666);
+      input_fd_ = open(fifo_path.c_str(), O_RDONLY | O_NONBLOCK);
       if (input_fd_ < 0) {
-        RCLCPP_ERROR(this->get_logger(), "Failed to open input FIFO: %s", input_fifo_path.c_str());
+        RCLCPP_ERROR(this->get_logger(), "Failed to open input FIFO: %s", fifo_path.c_str());
       } else {
-        RCLCPP_INFO(this->get_logger(), "Reading from input FIFO: %s", input_fifo_path.c_str());
+        RCLCPP_INFO(this->get_logger(), "Mode: FIFO -> ROS. FIFO: %s", fifo_path.c_str());
+        read_thread_ = std::thread(&ConvertNode::read_loop, this);
       }
-    } else if (enable_stdin) {
+    } else if (mode == "stdin_to_ros") {
+      pub_ = this->create_publisher<std_msgs::msg::Int16MultiArray>("out", 10);
       input_fd_ = STDIN_FILENO;
-      RCLCPP_INFO(this->get_logger(), "Reading from stdin (Pipe).");
-    }
-
-    if (input_fd_ >= 0) {
+      RCLCPP_INFO(this->get_logger(), "Mode: stdin -> ROS.");
       read_thread_ = std::thread(&ConvertNode::read_loop, this);
-    }
-
-    // --- Setup Output (ROS -> FIFO) ---
-    if (enable_fifo_output) {
-      mkfifo(output_fifo_path.c_str(), 0666);
-      output_fd_ = open(output_fifo_path.c_str(), O_RDWR | O_NONBLOCK);
+    } else if (mode == "ros_to_fifo") {
+      mkfifo(fifo_path.c_str(), 0666);
+      output_fd_ = open(fifo_path.c_str(), O_RDWR | O_NONBLOCK);
       if (output_fd_ < 0) {
-        RCLCPP_ERROR(this->get_logger(), "Failed to open output FIFO: %s", output_fifo_path.c_str());
+        RCLCPP_ERROR(this->get_logger(), "Failed to open output FIFO: %s", fifo_path.c_str());
       } else {
-        RCLCPP_INFO(this->get_logger(), "Writing to output FIFO: %s", output_fifo_path.c_str());
+        RCLCPP_INFO(this->get_logger(), "Mode: ROS -> FIFO. FIFO: %s", fifo_path.c_str());
         sub_ = this->create_subscription<std_msgs::msg::Int16MultiArray>(
           "in", 10, std::bind(&ConvertNode::write_callback, this, std::placeholders::_1));
       }
+    } else {
+      RCLCPP_ERROR(this->get_logger(), "FATAL: Invalid mode '%s'. Check CONVERT_MODE.", mode.c_str());
     }
   }
 
