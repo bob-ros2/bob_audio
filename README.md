@@ -124,6 +124,30 @@ export MIXER_ENABLE_STDOUT_OUTPUT=true
 ros2 run bob_audio mixer | ffmpeg -f s16le -ar 44100 -ac 2 -i pipe:0 ...
 ```
 
+### Full Audio Pipeline Test (FFmpeg -> ROS -> ffplay)
+
+A complete roundtrip to verify the entire system:
+
+```bash
+# 1. Create the FIFO for ffplay
+mkfifo /tmp/audio_ffplay
+
+# 2. Start the player (waits for data)
+ffplay -f s16le -ar 44100 -ac 2 -i /tmp/audio_ffplay
+
+# 3. Start the ROS-to-FIFO converter (Terminal 2)
+ros2 run bob_audio convert --ros-args \
+  -p mode:=ros_to_fifo \
+  -p fifo_path:=/tmp/audio_ffplay \
+  -r in:=/audio_stream
+
+# 4. Start the FFmpeg-to-ROS producer (Terminal 3)
+ffmpeg -re -i music.mp3 -f s16le -ar 44100 -ac 2 pipe:1 | \
+ros2 run bob_audio convert --ros-args \
+  -p mode:=stdin_to_ros \
+  -r out:=/audio_stream
+```
+
 ## License
 
 Apache-2.0
