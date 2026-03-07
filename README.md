@@ -78,22 +78,25 @@ ros2 topic pub --once /levels std_msgs/msg/String "{data: '{\"in0\": 0.2, \"mast
 
 ### 2. Convert Node (`convert`)
 
-Converts external raw audio streams (from files, pipes, or stdin) into ROS topics for the mixer.
+Bidirectional conversion between raw audio streams (FIFO/Pipe/stdin) and ROS messages.
 
 #### Parameters & Environment Variables
 
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `enable_fifo` | bool | `false` | Read raw bytes from a FIFO pipe (Env: `CONVERT_ENABLE_FIFO`) |
+| `enable_fifo` | bool | `false` | Read raw bytes from an input FIFO (Env: `CONVERT_ENABLE_FIFO`) |
 | `input_fifo` | string | `/tmp/audio_pipe` | Path to the input FIFO (Env: `CONVERT_INPUT_FIFO`) |
 | `enable_stdin` | bool | `false` | Read raw bytes from stdin (Env: `CONVERT_ENABLE_STDIN`) |
+| `enable_fifo_output`| bool | `false` | Write ROS messages to an output FIFO (Env: `CONVERT_ENABLE_FIFO_OUTPUT`) |
+| `output_fifo` | string | `/tmp/audio_out_pipe`| Path to the output FIFO (Env: `CONVERT_OUTPUT_FIFO`) |
 | `sample_rate` | int | `44100` | Audio sample rate in Hz (Env: `CONVERT_SAMPLE_RATE`) |
 | `channels` | int | `2` | Number of audio channels (Env: `CONVERT_CHANNELS`) |
 | `chunk_ms` | int | `20` | Chunk size in ms per ROS message (Env: `CONVERT_CHUNK_MS`) |
 
 #### Topics
 
-- **Publishers**: `out` (`std_msgs/msg/Int16MultiArray`).
+- **Subscribers**: `in` (`std_msgs/msg/Int16MultiArray`): Only active if `enable_fifo_output` is true.
+- **Publishers**: `out` (`std_msgs/msg/Int16MultiArray`): Mixed master output.
 
 ## Usage Examples
 
@@ -113,6 +116,19 @@ ros2 run bob_audio mixer --ros-args \
   -r in1:=/bob/audio_music \
   -p enable_fifo_output:=true \
   -p output_fifo:=/tmp/audio_master_pipe
+```
+
+### Listening to ROS audio (e.g. from Mixer) via ffplay
+
+```bash
+# Convert ROS topic to FIFO
+ros2 run bob_audio convert --ros-args \
+  -r in:=/out \
+  -p enable_fifo_output:=true \
+  -p output_fifo:=/tmp/audio_ffplay
+
+# Play the FIFO
+ffplay -f s16le -ar 44100 -ac 2 -i /tmp/audio_ffplay
 ```
 
 ### Piping directly into FFmpeg

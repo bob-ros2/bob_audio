@@ -77,9 +77,12 @@ public:
   ConvertNode()
   : Node("convert")
   {
+    // Ignore SIGPIPE to prevent crashing if a pipe reader disconnects
+    signal(SIGPIPE, SIG_IGN);
+
     auto descriptor = rcl_interfaces::msg::ParameterDescriptor();
 
-    // --- Input Configuration ---
+    // --- Input Configuration (FIFO/stdin -> ROS) ---
     descriptor.description =
       "Enable reading from an input FIFO "
       "(Default: false, Env: CONVERT_ENABLE_FIFO).";
@@ -100,6 +103,21 @@ public:
     bool enable_stdin = this->declare_parameter(
       "enable_stdin",
       get_env("CONVERT_ENABLE_STDIN", false), descriptor);
+
+    // --- Output Configuration (ROS -> FIFO) ---
+    descriptor.description =
+      "Enable writing ROS messages to an output FIFO "
+      "(Default: false, Env: CONVERT_ENABLE_FIFO_OUTPUT).";
+    bool enable_fifo_output = this->declare_parameter(
+      "enable_fifo_output",
+      get_env("CONVERT_ENABLE_FIFO_OUTPUT", false), descriptor);
+
+    descriptor.description =
+      "Path to the output FIFO "
+      "(Default: /tmp/audio_out_pipe, Env: CONVERT_OUTPUT_FIFO).";
+    std::string output_fifo_path = this->declare_parameter(
+      "output_fifo",
+      get_env("CONVERT_OUTPUT_FIFO", std::string("/tmp/audio_out_pipe")), descriptor);
 
     // --- Audio Format ---
     descriptor.description =
@@ -125,27 +143,37 @@ public:
 
     values_per_chunk_ = (sample_rate * chunk_ms / 1000) * channels;
 
+    // --- Setup Input (FIFO/stdin -> ROS) ---
     pub_ = this->create_publisher<std_msgs::msg::Int16MultiArray>("out", 10);
 
     if (enable_fifo) {
       mkfifo(input_fifo_path.c_str(), 0666);
       input_fd_ = open(input_fifo_path.c_str(), O_RDONLY | O_NONBLOCK);
       if (input_fd_ < 0) {
-        RCLCPP_ERROR(this->get_logger(), "Failed to open FIFO: %s", input_fifo_path.c_str());
+        RCLCPP_ERROR(this->get_logger(), "Failed to open input FIFO: %s", input_fifo_path.c_str());
       } else {
-        RCLCPP_INFO(this->get_logger(), "Reading from FIFO: %s", input_fifo_path.c_str());
+        RCLCPP_INFO(this->get_logger(), "Reading from input FIFO: %s", input_fifo_path.c_str());
       }
     } else if (enable_stdin) {
       input_fd_ = STDIN_FILENO;
       RCLCPP_INFO(this->get_logger(), "Reading from stdin (Pipe).");
-    } else {
-      RCLCPP_WARN(
-        this->get_logger(),
-        "No input source enabled! Use CONVERT_FIFO_ENABLE or CONVERT_STDIN_ENABLE.");
     }
 
     if (input_fd_ >= 0) {
       read_thread_ = std::thread(&ConvertNode::read_loop, this);
+    }
+
+    // --- Setup Output (ROS -> FIFO) ---
+    if (enable_fifo_output) {
+      mkfifo(output_fifo_path.c_str(), 0666);
+      output_fd_ = open(output_fifo_path.c_str(), O_RDWR | O_NONBLOCK);
+      if (output_fd_ < 0) {
+        RCLCPP_ERROR(this->get_logger(), "Failed to open output FIFO: %s", output_fifo_path.c_str());
+      } else {
+        RCLCPP_INFO(this->get_logger(), "Writing to output FIFO: %s", output_fifo_path.c_str());
+        sub_ = this->create_subscription<std_msgs::msg::Int16MultiArray>(
+          "in", 10, std::bind(&ConvertNode::write_callback, this, std::placeholders::_1));
+      }
     }
   }
 
@@ -158,13 +186,28 @@ public:
     if (input_fd_ >= 0 && input_fd_ != STDIN_FILENO) {
       close(input_fd_);
     }
+    if (output_fd_ >= 0) {
+      close(output_fd_);
+    }
   }
 
 private:
+  void write_callback(const std_msgs::msg::Int16MultiArray::SharedPtr msg)
+  {
+    if (output_fd_ >= 0 && !msg->data.empty()) {
+      ssize_t written = write(output_fd_, msg->data.data(), msg->data.size() * sizeof(int16_t));
+      if (written < 0) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+          RCLCPP_DEBUG(this->get_logger(), "Write error to output FIFO: %s", strerror(errno));
+        }
+      }
+    }
+  }
+
   void read_loop()
   {
     std::vector<int16_t> buffer(values_per_chunk_);
-    size_t chunk_bytes = values_per_chunk_ * 2;
+    size_t chunk_bytes = values_per_chunk_ * sizeof(int16_t);
 
     while (rclcpp::ok() && running_) {
       size_t total_read = 0;
@@ -191,9 +234,9 @@ private:
 
       if (total_read > 0) {
         auto msg = std_msgs::msg::Int16MultiArray();
-        msg.data.assign(buffer.begin(), buffer.begin() + (total_read / 2));
+        msg.data.assign(buffer.begin(), buffer.begin() + (total_read / sizeof(int16_t)));
         pub_->publish(msg);
-        RCLCPP_DEBUG(this->get_logger(), "Published %zu samples to ROS topic", total_read / 2);
+        RCLCPP_DEBUG(this->get_logger(), "Published %zu samples to ROS topic", total_read / sizeof(int16_t));
       }
 
 next_loop:
@@ -202,10 +245,12 @@ next_loop:
   }
 
   int input_fd_ = -1;
+  int output_fd_ = -1;
   int values_per_chunk_ = 0;
   bool running_ = true;
   std::thread read_thread_;
   rclcpp::Publisher<std_msgs::msg::Int16MultiArray>::SharedPtr pub_;
+  rclcpp::Subscription<std_msgs::msg::Int16MultiArray>::SharedPtr sub_;
 };
 
 int main(int argc, char ** argv)
