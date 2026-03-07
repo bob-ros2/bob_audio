@@ -19,8 +19,7 @@ jobs:
         run: |
           apt update && apt install -y \
             python3-colcon-common-extensions \
-            python3-rosdep \
-            libnlohmann-json-dev
+            python3-rosdep
           rosdep update
           rosdep install --from-paths . --ignore-src -y
 

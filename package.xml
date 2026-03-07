@@ -17,7 +17,7 @@
 
   <depend>rclcpp</depend>
   <depend>std_msgs</depend>
-  <depend>nlohmann-json</depend>
+  <depend>nlohmann-json3-dev</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
