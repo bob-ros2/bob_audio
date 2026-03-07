@@ -148,7 +148,9 @@ public:
           "in", 10, std::bind(&ConvertNode::write_callback, this, std::placeholders::_1));
       }
     } else {
-      RCLCPP_ERROR(this->get_logger(), "FATAL: Invalid mode '%s'. Check CONVERT_MODE.", mode.c_str());
+      RCLCPP_ERROR(
+        this->get_logger(), "FATAL: Invalid mode '%s'. Check CONVERT_MODE.",
+        mode.c_str());
     }
   }
 
@@ -211,7 +213,9 @@ private:
         auto msg = std_msgs::msg::Int16MultiArray();
         msg.data.assign(buffer.begin(), buffer.begin() + (total_read / sizeof(int16_t)));
         pub_->publish(msg);
-        RCLCPP_DEBUG(this->get_logger(), "Published %zu samples to ROS topic", total_read / sizeof(int16_t));
+        RCLCPP_DEBUG(
+          this->get_logger(), "Published %zu samples to ROS topic",
+          total_read / sizeof(int16_t));
       }
 
 next_loop:
