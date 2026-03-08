@@ -196,7 +196,7 @@ public:
     // Create input subscribers
     for (int i = 0; i < input_count_; ++i) {
       std::string topic = "in" + std::to_string(i);
-      
+
       descriptor.description = "Number of channels for " + topic + " (Default: same as mixer).";
       int in_ch = this->declare_parameter(topic + "_channels", channels_, descriptor);
       input_topic_channels_.push_back(in_ch);
@@ -251,7 +251,7 @@ private:
 
       for (int i = 0; i < input_count_; ++i) {
         std::string base_key = "in" + std::to_string(i);
-        
+
         // --- Structured Object Support ---
         // Example: {"in0": {"gain": 0.5, "channels": 1}}
         if (j.contains(base_key) && j[base_key].is_object()) {
@@ -261,7 +261,9 @@ private:
           }
           if (j[base_key].contains("channels") && j[base_key]["channels"].is_number()) {
             input_topic_channels_[i] = j[base_key]["channels"].get<int>();
-            RCLCPP_INFO(this->get_logger(), "Set channels for in%d to %d", i, input_topic_channels_[i]);
+            RCLCPP_INFO(
+              this->get_logger(), "Set channels for in%d to %d", i,
+              input_topic_channels_[i]);
           }
         }
 
@@ -275,7 +277,9 @@ private:
         std::string chan_key = base_key + "_channels";
         if (j.contains(chan_key) && j[chan_key].is_number()) {
           input_topic_channels_[i] = j[chan_key].get<int>();
-          RCLCPP_INFO(this->get_logger(), "Set channels for in%d to %d", i, input_topic_channels_[i]);
+          RCLCPP_INFO(
+            this->get_logger(), "Set channels for in%d to %d", i,
+            input_topic_channels_[i]);
         }
       }
 
@@ -303,7 +307,7 @@ private:
       bool has_data = false;
       // 1. Collect from ROS topics
       for (int i = 0; i < input_count_; ++i) {
-        if (input_buffers_[i].empty()) continue;
+        if (input_buffers_[i].empty()) {continue;}
         has_data = true;
 
         int in_ch = input_topic_channels_[i];
@@ -311,17 +315,19 @@ private:
 
         if (in_ch == 1 && channels_ == 2) {
           // Upmix Mono to Stereo
-          size_t samples_to_pull = std::min(input_buffers_[i].size(), static_cast<size_t>(samples_per_chunk_));
+          size_t samples_to_pull =
+            std::min(input_buffers_[i].size(), static_cast<size_t>(samples_per_chunk_));
           for (size_t j = 0; j < samples_to_pull; ++j) {
             int16_t sample = input_buffers_[i].front();
             input_buffers_[i].pop_front();
             int32_t val = static_cast<int32_t>(sample * gain);
-            mixed_data[j * 2] += val;     // Left
-            mixed_data[j * 2 + 1] += val; // Right
+            mixed_data[j * 2] += val;  // Left
+            mixed_data[j * 2 + 1] += val;  // Right
           }
         } else {
           // Same channel count (hopefully)
-          size_t values_to_pull = std::min(input_buffers_[i].size(), static_cast<size_t>(values_per_chunk_));
+          size_t values_to_pull =
+            std::min(input_buffers_[i].size(), static_cast<size_t>(values_per_chunk_));
           for (size_t j = 0; j < values_to_pull; ++j) {
             mixed_data[j] += static_cast<int32_t>(input_buffers_[i].front() * gain);
             input_buffers_[i].pop_front();
@@ -415,7 +421,7 @@ int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
   auto node = std::make_shared<MixerNode>();
-  
+
   // Use MultiThreadedExecutor with 4 threads for parallel callback processing
   rclcpp::executors::MultiThreadedExecutor executor(
     rclcpp::ExecutorOptions(), 4);
