@@ -6,9 +6,10 @@ A high-performance ROS 2 package for audio mixing and conversion, optimized for 
 
 ## Features
 
-- **High Performance**: Written in C++ with minimal overhead.
-- **Flexible Mixing**: Mix up to 8 ROS topics (via `Int16MultiArray`) and optional FIFO inputs.
-- **Real-time Volume Control**: Change gain for each input or master via JSON.
+- **High Performance**: Written in C++ with Multithreaded execution for low-latency audio processing.
+- **Flexible Mixing**: Mix a configurable number of ROS topics (via `Int16MultiArray`) and optional FIFO inputs.
+- **Smart Upmixing**: Automatic Mono-to-Stereo upmixing for seamless integration of TTS and music sources.
+- **Dynamic Control**: Live reconfiguration of gain and channel counts for each individual input via JSON.
 - **Docker Friendly**: No hardware audio device requirements.
 - **Multiple Output Sinks**: Stream to ROS topics, FIFO pipes, or directly to stdout (for FFmpeg).
 - **Audio Conversion**: Bidirectional conversion between raw streams and ROS messages.
