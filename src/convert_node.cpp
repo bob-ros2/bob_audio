@@ -40,6 +40,22 @@ static std::string get_env(const char * name, const std::string & default_val)
 }
 
 /**
+ * @brief Gets an environment variable as a bool.
+ */
+static bool get_env(const char * name, bool default_val)
+{
+  const char * val = std::getenv(name);
+  if (!val) {
+    return default_val;
+  }
+  std::string s(val);
+  std::transform(
+    s.begin(), s.end(), s.begin(),
+    [](unsigned char c) {return std::tolower(c);});
+  return s == "true" || s == "1" || s == "yes" || s == "on";
+}
+
+/**
  * @brief Gets an environment variable as an int.
  */
 static int get_env(const char * name, int default_val)
@@ -105,8 +121,10 @@ public:
 
     descriptor.description =
       "Generate silent frames if no ROS audio is received (for ros_to_fifo) "
-      "(Default: true).";
-    bool enable_heartbeat = this->declare_parameter("heartbeat", true, descriptor);
+      "(Default: true, Env: CONVERT_HEARTBEAT).";
+    bool enable_heartbeat = this->declare_parameter(
+      "heartbeat",
+      get_env("CONVERT_HEARTBEAT", true), descriptor);
 
     values_per_chunk_ = (sample_rate * chunk_ms / 1000) * channels;
 
