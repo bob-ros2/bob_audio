@@ -172,11 +172,12 @@ public:
 
     if (enable_fifo_input) {
       mkfifo(input_fifo_path.c_str(), 0666);
-      input_fifo_fd_ = open(input_fifo_path.c_str(), O_RDWR | O_NONBLOCK);
+      input_fifo_fd_ = open(input_fifo_path.c_str(), O_RDWR);
       if (input_fifo_fd_ < 0) {
         RCLCPP_ERROR(this->get_logger(), "Failed to open input FIFO: %s", input_fifo_path.c_str());
       } else {
-        RCLCPP_INFO(this->get_logger(), "Input FIFO opened: %s", input_fifo_path.c_str());
+        RCLCPP_INFO(this->get_logger(), "Input FIFO opened (Buffered): %s", input_fifo_path.c_str());
+        fifo_input_thread_ = std::thread(&MixerNode::fifo_input_loop, this);
       }
     }
 
@@ -229,17 +230,52 @@ public:
 
   ~MixerNode()
   {
+    running_ = false;
+    if (fifo_input_thread_.joinable()) {
+      fifo_input_thread_.join();
+    }
     if (output_fifo_fd_ >= 0) {close(output_fifo_fd_);}
     if (input_fifo_fd_ >= 0) {close(input_fifo_fd_);}
   }
 
 private:
+  void fifo_input_loop()
+  {
+    std::vector<int16_t> read_buffer(2048);
+    while (rclcpp::ok() && running_) {
+      if (input_fifo_fd_ < 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        continue;
+      }
+
+      ssize_t bytes_read = read(input_fifo_fd_, read_buffer.data(), read_buffer.size() * 2);
+      if (bytes_read > 0) {
+        size_t samples_read = bytes_read / 2;
+        std::lock_guard<std::mutex> lock(fifo_mutex_);
+        for (size_t i = 0; i < samples_read; ++i) {
+          fifo_input_buffer_.push_back(read_buffer[i]);
+        }
+        // Cap buffer to 1 second of audio (176400 bytes for 44.1k Stereo) to prevent lag
+        size_t max_fifo_samples = sample_rate_ * channels_ * 1.0;
+        while (fifo_input_buffer_.size() > max_fifo_samples) {
+          fifo_input_buffer_.pop_front();
+        }
+      } else {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+    }
+  }
+
   void topic_callback(int index, const std_msgs::msg::Int16MultiArray::SharedPtr msg)
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    RCLCPP_DEBUG(this->get_logger(), "Received %zu samples on topic in%d", msg->data.size(), index);
     for (const auto & val : msg->data) {
       input_buffers_[index].push_back(val);
+    }
+    // Limit buffer to 500ms
+    size_t max_topic_samples = sample_rate_ * input_topic_channels_[index] * 0.5;
+    while (input_buffers_[index].size() > max_topic_samples) {
+      input_buffers_[index].pop_front();
     }
   }
 
@@ -335,15 +371,15 @@ private:
         }
       }
 
-      // 2. Collect from input FIFO if enabled
+      // 2. Collect from input FIFO buffer if enabled
       if (input_fifo_fd_ >= 0) {
-        std::vector<int16_t> fifo_buffer(values_per_chunk_);
-        ssize_t bytes_read = read(input_fifo_fd_, fifo_buffer.data(), values_per_chunk_ * 2);
-        if (bytes_read > 0) {
+        std::lock_guard<std::mutex> lock(fifo_mutex_);
+        if (!fifo_input_buffer_.empty()) {
           has_data = true;
-          size_t samples_read = bytes_read / 2;
-          for (size_t j = 0; j < samples_read; ++j) {
-            mixed_data[j] += static_cast<int32_t>(fifo_buffer[j] * fifo_gain_);
+          size_t samples_to_pull = std::min(fifo_input_buffer_.size(), static_cast<size_t>(values_per_chunk_));
+          for (size_t j = 0; j < samples_to_pull; ++j) {
+            mixed_data[j] += static_cast<int32_t>(fifo_input_buffer_.front() * fifo_gain_);
+            fifo_input_buffer_.pop_front();
           }
         }
       }
@@ -416,6 +452,11 @@ private:
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr control_sub_;
   rclcpp::Publisher<std_msgs::msg::Int16MultiArray>::SharedPtr pub_;
   rclcpp::TimerBase::SharedPtr timer_;
+
+  std::thread fifo_input_thread_;
+  std::deque<int16_t> fifo_input_buffer_;
+  std::mutex fifo_mutex_;
+  std::atomic<bool> running_{true};
 };
 
 int main(int argc, char ** argv)
