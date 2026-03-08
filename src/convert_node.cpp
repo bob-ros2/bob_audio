@@ -103,6 +103,11 @@ public:
       "chunk_ms",
       get_env("CONVERT_CHUNK_MS", 20), descriptor);
 
+    descriptor.description =
+      "Generate silent frames if no ROS audio is received (for ros_to_fifo) "
+      "(Default: true).";
+    bool enable_heartbeat = this->declare_parameter("heartbeat", true, descriptor);
+
     values_per_chunk_ = (sample_rate * chunk_ms / 1000) * channels;
 
     // --- Mode Execution ---
@@ -130,6 +135,14 @@ public:
         RCLCPP_INFO(this->get_logger(), "Mode: ROS -> FIFO. FIFO: %s", fifo_path.c_str());
         sub_ = this->create_subscription<std_msgs::msg::Int16MultiArray>(
           "in", 10, std::bind(&ConvertNode::write_callback, this, std::placeholders::_1));
+
+        if (enable_heartbeat) {
+          last_audio_time_ = this->now();
+          heartbeat_timer_ = this->create_wall_timer(
+            std::chrono::milliseconds(chunk_ms),
+            std::bind(&ConvertNode::heartbeat_callback, this));
+          RCLCPP_INFO(this->get_logger(), "Heartbeat (silence) enabled: %d ms", chunk_ms);
+        }
       }
     } else {
       RCLCPP_ERROR(
@@ -156,12 +169,34 @@ private:
   void write_callback(const std_msgs::msg::Int16MultiArray::SharedPtr msg)
   {
     if (output_fd_ >= 0 && !msg->data.empty()) {
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        last_audio_time_ = this->now();
+      }
       ssize_t written = write(output_fd_, msg->data.data(), msg->data.size() * sizeof(int16_t));
       if (written < 0) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
           RCLCPP_DEBUG(this->get_logger(), "Write error to output FIFO: %s", strerror(errno));
         }
       }
+    }
+  }
+
+  void heartbeat_callback()
+  {
+    if (output_fd_ < 0) {return;}
+
+    rclcpp::Time last;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      last = last_audio_time_;
+    }
+
+    auto now = this->now();
+    // If no audio for > 2x chunk duration, send a silent chunk to keep FFmpeg running
+    if ((now - last).nanoseconds() > (values_per_chunk_ * 1000000000LL / 44100 / 2)) {
+      std::vector<int16_t> silence(values_per_chunk_, 0);
+      write(output_fd_, silence.data(), silence.size() * sizeof(int16_t));
     }
   }
 
@@ -214,6 +249,10 @@ next_loop:
   std::thread read_thread_;
   rclcpp::Publisher<std_msgs::msg::Int16MultiArray>::SharedPtr pub_;
   rclcpp::Subscription<std_msgs::msg::Int16MultiArray>::SharedPtr sub_;
+  
+  rclcpp::TimerBase::SharedPtr heartbeat_timer_;
+  rclcpp::Time last_audio_time_;
+  std::mutex mutex_;
 };
 
 int main(int argc, char ** argv)
