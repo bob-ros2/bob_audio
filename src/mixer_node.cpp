@@ -184,6 +184,15 @@ public:
       pub_ = this->create_publisher<std_msgs::msg::Int16MultiArray>("out", 10);
     }
 
+    // --- Callback Groups for Multithreading ---
+    // Subscribers get a reentrant group (can run in parallel)
+    cb_group_subs_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
+    // Timer gets a mutually exclusive group (prevent overlapping loops)
+    cb_group_timer_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+
+    auto sub_options = rclcpp::SubscriptionOptions();
+    sub_options.callback_group = cb_group_subs_;
+
     // Create input subscribers
     for (int i = 0; i < input_count_; ++i) {
       std::string topic = "in" + std::to_string(i);
@@ -197,20 +206,21 @@ public:
           topic, 10,
           [this, i](const std_msgs::msg::Int16MultiArray::SharedPtr msg) {
             this->topic_callback(i, msg);
-          }));
+          }, sub_options));
       input_buffers_.emplace_back();
       input_gains_.push_back(1.0f);
     }
 
-    // Dynamic Control Subscriber (Gain and Channels)
+    // Dynamic Control Subscriber
     control_sub_ = this->create_subscription<std_msgs::msg::String>(
       "control", 10,
-      std::bind(&MixerNode::control_callback, this, std::placeholders::_1));
+      std::bind(&MixerNode::control_callback, this, std::placeholders::_1), sub_options);
 
     // Timer for mixing loop
     timer_ = this->create_wall_timer(
       std::chrono::milliseconds(chunk_ms),
-      std::bind(&MixerNode::mix_loop, this));
+      std::bind(&MixerNode::mix_loop, this),
+      cb_group_timer_);
 
     RCLCPP_INFO(
       this->get_logger(), "Mixer Node started. Rate: %dHz, Channels: %d, Chunk: %dms, Inputs: %d",
@@ -394,6 +404,8 @@ private:
   float master_gain_ = 1.0f;
   std::mutex mutex_;
 
+  rclcpp::CallbackGroup::SharedPtr cb_group_subs_;
+  rclcpp::CallbackGroup::SharedPtr cb_group_timer_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr control_sub_;
   rclcpp::Publisher<std_msgs::msg::Int16MultiArray>::SharedPtr pub_;
   rclcpp::TimerBase::SharedPtr timer_;
@@ -403,7 +415,13 @@ int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
   auto node = std::make_shared<MixerNode>();
-  rclcpp::spin(node);
+  
+  // Use MultiThreadedExecutor with 4 threads for parallel callback processing
+  rclcpp::executors::MultiThreadedExecutor executor(
+    rclcpp::ExecutorOptions(), 4);
+  executor.add_node(node);
+  executor.spin();
+
   rclcpp::shutdown();
   return 0;
 }
