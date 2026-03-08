@@ -339,21 +339,21 @@ private:
 
     {
       std::lock_guard<std::mutex> lock(mutex_);
-
       bool has_data = false;
       // 1. Collect from ROS topics
       for (int i = 0; i < input_count_; ++i) {
-        if (input_buffers_[i].empty()) {continue;}
-        has_data = true;
-
         int in_ch = input_topic_channels_[i];
         float gain = input_gains_[i];
+        size_t required = (in_ch == 1 && channels_ == 2) ?
+          static_cast<size_t>(samples_per_chunk_) : static_cast<size_t>(values_per_chunk_);
+
+        // Only pull if we have enough for a FULL chunk to prevent staccato gaps
+        if (input_buffers_[i].size() < required) {continue;}
+        has_data = true;
 
         if (in_ch == 1 && channels_ == 2) {
           // Upmix Mono to Stereo
-          size_t samples_to_pull =
-            std::min(input_buffers_[i].size(), static_cast<size_t>(samples_per_chunk_));
-          for (size_t j = 0; j < samples_to_pull; ++j) {
+          for (size_t j = 0; j < required; ++j) {
             int16_t sample = input_buffers_[i].front();
             input_buffers_[i].pop_front();
             int32_t val = static_cast<int32_t>(sample * gain);
@@ -361,10 +361,8 @@ private:
             mixed_data[j * 2 + 1] += val;  // Right
           }
         } else {
-          // Same channel count (hopefully)
-          size_t values_to_pull =
-            std::min(input_buffers_[i].size(), static_cast<size_t>(values_per_chunk_));
-          for (size_t j = 0; j < values_to_pull; ++j) {
+          // Same channel count
+          for (size_t j = 0; j < required; ++j) {
             mixed_data[j] += static_cast<int32_t>(input_buffers_[i].front() * gain);
             input_buffers_[i].pop_front();
           }
@@ -374,10 +372,10 @@ private:
       // 2. Collect from input FIFO buffer if enabled
       if (input_fifo_fd_ >= 0) {
         std::lock_guard<std::mutex> lock(fifo_mutex_);
-        if (!fifo_input_buffer_.empty()) {
+        // Only pull if we have enough for a FULL chunk
+        if (fifo_input_buffer_.size() >= static_cast<size_t>(values_per_chunk_)) {
           has_data = true;
-          size_t samples_to_pull = std::min(fifo_input_buffer_.size(), static_cast<size_t>(values_per_chunk_));
-          for (size_t j = 0; j < samples_to_pull; ++j) {
+          for (size_t j = 0; j < static_cast<size_t>(values_per_chunk_); ++j) {
             mixed_data[j] += static_cast<int32_t>(fifo_input_buffer_.front() * fifo_gain_);
             fifo_input_buffer_.pop_front();
           }
