@@ -7,10 +7,9 @@ A high-performance ROS 2 package for audio mixing and conversion, optimized for 
 ## Features
 
 - **High Performance**: Written in C++ with minimal overhead.
-- **Flexible Mixing**: Mix up to 8 ROS topics (via `Int16MultiArray`) and optional FIFO inputs.
-- **Real-time Volume Control**: Change gain for each input or master via JSON.
+- **Efficient Mixing**: Mix up to 8 ROS topics (via `Int16MultiArray`) with additive mixing and clipping protection.
 - **Docker Friendly**: No hardware audio device requirements.
-- **Multiple Output Sinks**: Stream to ROS topics, FIFO pipes, or directly to stdout (for FFmpeg).
+- **FIFO Output**: Stream mixed audio directly to a named pipe (FIFO).
 - **Audio Conversion**: Bidirectional conversion between raw streams and ROS messages.
 
 ## Installation & Build
@@ -18,7 +17,7 @@ A high-performance ROS 2 package for audio mixing and conversion, optimized for 
 ### Prerequisites
 
 - ROS 2 Humble (or newer)
-- `std_msgs`, `nlohmann_json`
+- `std_msgs`, `nlohmann-json`
 
 ### Build
 
@@ -35,48 +34,22 @@ source install/setup.bash
 
 ### 1. Mixer Node (`mixer`)
 
-The mixer node takes multiple audio inputs and aggregates them into one master output using additive mixing with clipping protection.
+The mixer node takes multiple audio inputs and aggregates them into one master output FIFO.
 
 #### Parameters & Environment Variables
 
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `enable_fifo_output` | bool | `false` | Enable writing to a FIFO pipe (Env: `MIXER_ENABLE_FIFO_OUTPUT`) |
+| `enable_fifo_output` | bool | `true` | Enable writing to a FIFO pipe (Env: `MIXER_ENABLE_FIFO_OUTPUT`) |
 | `output_fifo` | string | `/tmp/audio_master_pipe`| Path to the master output FIFO (Env: `MIXER_OUTPUT_FIFO`) |
-| `enable_stdout_output`| bool | `false` | Write raw audio to stdout for piping (Env: `MIXER_ENABLE_STDOUT_OUTPUT`) |
-| `enable_topic_output` | bool | `true` | Publish mixed audio to ROS topic `out` (Env: `MIXER_ENABLE_TOPIC_OUTPUT`) |
-| `enable_fifo_input` | bool | `false` | Read from an additional input FIFO pipe (Env: `MIXER_ENABLE_FIFO_INPUT`) |
-| `input_fifo` | string | `/tmp/audio_pipe` | Path to the input FIFO (Env: `MIXER_INPUT_FIFO`) |
 | `sample_rate` | int | `44100` | Audio sample rate in Hz (Env: `MIXER_SAMPLE_RATE`) |
-| `channels` | int | `2` | Number of audio channels (Env: `MIXER_CHANNELS`) |
+| `channels` | int | `1` | Number of audio channels (Env: `MIXER_CHANNELS`) |
 | `chunk_ms` | int | `20` | Processing interval per chunk in ms (Env: `MIXER_CHUNK_MS`) |
 
 #### Topics
 
 - **Subscribers**: 
   - `in0` ... `in7` (`std_msgs/msg/Int16MultiArray`): Audio input streams.
-  - `levels` (`std_msgs/msg/String`): JSON-based volume control.
-- **Publishers**: 
-  - `out` (`std_msgs/msg/Int16MultiArray`): Mixed master output.
-
-#### Real-time Volume Control (JSON)
-
-You can adjust volumes on the fly by sending a JSON string to the `levels` topic.
-
-**Format:**
-```json
-{
-  "in0": 0.5,    // Set input 0 to 50%
-  "in1": 1.2,    // Set input 1 to 120%
-  "fifo": 0.8,   // Set FIFO input gain
-  "master": 0.7  // Set global master gain
-}
-```
-
-**Example:**
-```bash
-ros2 topic pub --once /levels std_msgs/msg/String "{data: '{\"in0\": 0.2, \"master\": 0.5}'}"
-```
 
 ### 2. Convert Node (`convert`)
 
@@ -117,13 +90,6 @@ ros2 run bob_audio convert --ros-args \
 
 # Play the FIFO
 ffplay -f s16le -ar 44100 -ac 2 -i /tmp/audio_ffplay
-```
-
-### Piping Mixer directly into FFmpeg
-
-```bash
-export MIXER_ENABLE_STDOUT_OUTPUT=true
-ros2 run bob_audio mixer | ffmpeg -f s16le -ar 44100 -ac 2 -i pipe:0 ...
 ```
 
 ### Full Audio Pipeline Test (FFmpeg -> ROS -> ffplay)

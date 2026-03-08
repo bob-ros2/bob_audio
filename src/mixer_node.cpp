@@ -89,68 +89,25 @@ public:
     auto descriptor = rcl_interfaces::msg::ParameterDescriptor();
 
     // --- Output Parameters ---
-    descriptor.description =
-      "Enable writing mixed audio to a FIFO pipe "
-      "(Default: false, Env: MIXER_ENABLE_FIFO_OUTPUT).";
+    descriptor.description = "Enable FIFO output (Default: true).";
     bool enable_fifo_output = this->declare_parameter(
-      "enable_fifo_output",
-      get_env("MIXER_ENABLE_FIFO_OUTPUT", false), descriptor);
+      "enable_fifo_output", get_env("MIXER_ENABLE_FIFO_OUTPUT", true), descriptor);
 
-    descriptor.description =
-      "Path to the output FIFO pipe "
-      "(Default: /tmp/audio_master_pipe, Env: MIXER_OUTPUT_FIFO).";
+    descriptor.description = "Output FIFO path.";
+    std::string default_pipe = "/tmp/audio_master_pipe";
     std::string output_fifo_path = this->declare_parameter(
-      "output_fifo",
-      get_env("MIXER_OUTPUT_FIFO", std::string("/tmp/audio_master_pipe")), descriptor);
-
-    descriptor.description =
-      "Enable writing mixed audio to stdout for piping "
-      "(Default: false, Env: MIXER_ENABLE_STDOUT_OUTPUT).";
-    enable_stdout_output_ = this->declare_parameter(
-      "enable_stdout_output",
-      get_env("MIXER_ENABLE_STDOUT_OUTPUT", false), descriptor);
-
-    descriptor.description =
-      "Enable publishing mixed audio to a ROS topic "
-      "(Default: true, Env: MIXER_ENABLE_TOPIC_OUTPUT).";
-    bool enable_topic_output = this->declare_parameter(
-      "enable_topic_output",
-      get_env("MIXER_ENABLE_TOPIC_OUTPUT", true), descriptor);
-
-    // --- Input Parameters ---
-    descriptor.description =
-      "Enable reading audio from an input FIFO pipe "
-      "(Default: false, Env: MIXER_ENABLE_FIFO_INPUT).";
-    bool enable_fifo_input = this->declare_parameter(
-      "enable_fifo_input",
-      get_env("MIXER_ENABLE_FIFO_INPUT", false), descriptor);
-
-    descriptor.description =
-      "Path to the input FIFO pipe "
-      "(Default: /tmp/audio_pipe, Env: MIXER_INPUT_FIFO).";
-    std::string input_fifo_path = this->declare_parameter(
-      "input_fifo",
-      get_env("MIXER_INPUT_FIFO", std::string("/tmp/audio_pipe")), descriptor);
+      "output_fifo", get_env("MIXER_OUTPUT_FIFO", default_pipe), descriptor);
 
     // --- Audio Format ---
-    descriptor.description = "Audio sample rate (Default: 44100, Env: MIXER_SAMPLE_RATE).";
+    // TTS node defaults to 44100 Hz output
     sample_rate_ = this->declare_parameter(
-      "sample_rate",
-      get_env("MIXER_SAMPLE_RATE", 44100), descriptor);
-
-    descriptor.description = "Number of audio channels (Default: 2, Env: MIXER_CHANNELS).";
+      "sample_rate", get_env("MIXER_SAMPLE_RATE", 44100), descriptor);
     channels_ = this->declare_parameter(
-      "channels",
-      get_env("MIXER_CHANNELS", 2), descriptor);
-
-    descriptor.description = "Chunk size in milliseconds (Default: 20, Env: MIXER_CHUNK_MS).";
+      "channels", get_env("MIXER_CHANNELS", 1), descriptor);
     int chunk_ms = this->declare_parameter(
-      "chunk_ms",
-      get_env("MIXER_CHUNK_MS", 20), descriptor);
+      "chunk_ms", get_env("MIXER_CHUNK_MS", 20), descriptor);
 
-    // --- Internal State ---
-    samples_per_chunk_ = (sample_rate_ * chunk_ms) / 1000;
-    values_per_chunk_ = samples_per_chunk_ * channels_;
+    values_per_chunk_ = (sample_rate_ * chunk_ms * channels_) / 1000;
 
     if (enable_fifo_output) {
       mkfifo(output_fifo_path.c_str(), 0666);
@@ -166,197 +123,95 @@ public:
       }
     }
 
-
-    if (enable_fifo_input) {
-      mkfifo(input_fifo_path.c_str(), 0666);
-      input_fifo_fd_ = open(input_fifo_path.c_str(), O_RDWR | O_NONBLOCK);
-      if (input_fifo_fd_ < 0) {
-        RCLCPP_ERROR(this->get_logger(), "Failed to open input FIFO: %s", input_fifo_path.c_str());
-      } else {
-        RCLCPP_INFO(this->get_logger(), "Input FIFO opened: %s", input_fifo_path.c_str());
-      }
-    }
-
-    if (enable_topic_output) {
-      pub_ = this->create_publisher<std_msgs::msg::Int16MultiArray>("out", 10);
-    }
-
-    // Create 8 input subscribers
+    // Subscribers
     for (int i = 0; i < 8; ++i) {
       std::string topic = "in" + std::to_string(i);
       subs_.push_back(
         this->create_subscription<std_msgs::msg::Int16MultiArray>(
           topic, 10,
           [this, i](const std_msgs::msg::Int16MultiArray::SharedPtr msg) {
-            this->topic_callback(i, msg);
+            std::lock_guard<std::mutex> lock(mutex_);
+            for (auto v : msg->data) {
+              input_buffers_[i].push_back(v);
+            }
           }));
       input_buffers_.emplace_back();
       input_gains_.push_back(1.0f);
     }
 
-    // Dynamic Level Control Subscriber
-    levels_sub_ = this->create_subscription<std_msgs::msg::String>(
-      "levels", 10,
-      std::bind(&MixerNode::levels_callback, this, std::placeholders::_1));
-
-    // Timer for mixing loop
     timer_ = this->create_wall_timer(
       std::chrono::milliseconds(chunk_ms),
       std::bind(&MixerNode::mix_loop, this));
 
     RCLCPP_INFO(
-      this->get_logger(), "Mixer Node started. Rate: %dHz, Channels: %d, Chunk: %dms",
+      this->get_logger(), "Mixer started: %dHz, %dch, %dms",
       sample_rate_, channels_, chunk_ms);
   }
 
   ~MixerNode()
   {
-    if (output_fifo_fd_ >= 0) {close(output_fifo_fd_);}
-    if (input_fifo_fd_ >= 0) {close(input_fifo_fd_);}
+    if (output_fifo_fd_ >= 0) {
+      close(output_fifo_fd_);
+    }
   }
 
 private:
-  void topic_callback(int index, const std_msgs::msg::Int16MultiArray::SharedPtr msg)
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    RCLCPP_DEBUG(this->get_logger(), "Received %zu samples on topic in%d", msg->data.size(), index);
-    for (const auto & val : msg->data) {
-      input_buffers_[index].push_back(val);
-    }
-  }
-
-  void levels_callback(const std_msgs::msg::String::SharedPtr msg)
-  {
-    try {
-      auto j = nlohmann::json::parse(msg->data);
-      std::lock_guard<std::mutex> lock(mutex_);
-
-      for (int i = 0; i < 8; ++i) {
-        std::string key = "in" + std::to_string(i);
-        if (j.contains(key) && j[key].is_number()) {
-          input_gains_[i] = j[key].get<float>();
-          RCLCPP_INFO(this->get_logger(), "Set gain for in%d to %.2f", i, input_gains_[i]);
-        }
-      }
-
-      if (j.contains("fifo") && j["fifo"].is_number()) {
-        fifo_gain_ = j["fifo"].get<float>();
-        RCLCPP_INFO(this->get_logger(), "Set gain for fifo to %.2f", fifo_gain_);
-      }
-
-      if (j.contains("master") && j["master"].is_number()) {
-        master_gain_ = j["master"].get<float>();
-        RCLCPP_INFO(this->get_logger(), "Set master gain to %.2f", master_gain_);
-      }
-    } catch (const std::exception & e) {
-      RCLCPP_WARN(this->get_logger(), "Failed to parse levels JSON: %s", e.what());
-    }
-  }
-
   void mix_loop()
   {
     std::vector<int32_t> mixed_data(values_per_chunk_, 0);
+    bool any_source_ready = false;
 
     {
       std::lock_guard<std::mutex> lock(mutex_);
 
-      bool has_data = false;
-      // 1. Collect from ROS topics
+      // SOLID CHUNK PROTECTION: Only process if at least one buffer has a full chunk
       for (int i = 0; i < 8; ++i) {
-        if (!input_buffers_[i].empty()) {
-          has_data = true;
+        if (input_buffers_[i].size() >= static_cast<size_t>(values_per_chunk_)) {
+          any_source_ready = true;
+          break;
         }
-        size_t to_pull = std::min(input_buffers_[i].size(), static_cast<size_t>(values_per_chunk_));
+      }
+
+      if (!any_source_ready) {
+        return;  // Wait for real audio data
+      }
+
+      for (int i = 0; i < 8; ++i) {
+        size_t available = input_buffers_[i].size();
+        size_t to_pull = std::min(available, static_cast<size_t>(values_per_chunk_));
         float gain = input_gains_[i];
         for (size_t j = 0; j < to_pull; ++j) {
           mixed_data[j] += static_cast<int32_t>(input_buffers_[i].front() * gain);
           input_buffers_[i].pop_front();
         }
       }
-
-      // 2. Collect from input FIFO if enabled
-      if (input_fifo_fd_ >= 0) {
-        std::vector<int16_t> fifo_buffer(values_per_chunk_);
-        ssize_t bytes_read = read(input_fifo_fd_, fifo_buffer.data(), values_per_chunk_ * 2);
-        if (bytes_read > 0) {
-          has_data = true;
-          size_t samples_read = bytes_read / 2;
-          for (size_t j = 0; j < samples_read; ++j) {
-            mixed_data[j] += static_cast<int32_t>(fifo_buffer[j] * fifo_gain_);
-          }
-        }
-      }
-
-      if (!has_data) {
-        return;  // Prevent silence gaps
-      }
     }
 
-    // Clipping and conversion back to int16
     std::vector<int16_t> final_data(values_per_chunk_);
     for (int i = 0; i < values_per_chunk_; ++i) {
       int32_t val = static_cast<int32_t>(mixed_data[i] * master_gain_);
-      if (val > 32767) {
-        val = 32767;
-      } else if (val < -32768) {
-        val = -32768;
-      }
-      final_data[i] = static_cast<int16_t>(val);
+      final_data[i] = static_cast<int16_t>(std::max(-32768, std::min(32767, val)));
     }
 
-    // --- Outputs ---
-
-    // 1. Topic Output
-    if (pub_) {
-      auto msg = std_msgs::msg::Int16MultiArray();
-      msg.data = final_data;
-      pub_->publish(msg);
-    }
-
-    // 2. FIFO Output
     if (output_fifo_fd_ >= 0) {
       write(output_fifo_fd_, final_data.data(), values_per_chunk_ * 2);
     }
-
-    // 3. Stdout Output (FFmpeg pipe)
-    if (enable_stdout_output_) {
-      write(STDOUT_FILENO, final_data.data(), values_per_chunk_ * 2);
-    }
-
-    static int loop_count = 0;
-    if (++loop_count % 100 == 0) {
-      RCLCPP_DEBUG(
-        this->get_logger(), "Mixing... Buffer in0: %zu samples",
-        input_buffers_[0].size());
-    }
   }
 
-  int sample_rate_;
-  int channels_;
-  int samples_per_chunk_;
-  int values_per_chunk_;
-
+  int sample_rate_, channels_, values_per_chunk_;
   int output_fifo_fd_ = -1;
-  int input_fifo_fd_ = -1;
-  bool enable_stdout_output_ = false;
-
   std::vector<rclcpp::Subscription<std_msgs::msg::Int16MultiArray>::SharedPtr> subs_;
   std::vector<std::deque<int16_t>> input_buffers_;
   std::vector<float> input_gains_;
-  float fifo_gain_ = 1.0f;
   float master_gain_ = 1.0f;
   std::mutex mutex_;
-
-  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr levels_sub_;
-  rclcpp::Publisher<std_msgs::msg::Int16MultiArray>::SharedPtr pub_;
   rclcpp::TimerBase::SharedPtr timer_;
 };
 
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
-  auto node = std::make_shared<MixerNode>();
-  rclcpp::spin(node);
+  rclcpp::spin(std::make_shared<MixerNode>());
   rclcpp::shutdown();
   return 0;
 }
