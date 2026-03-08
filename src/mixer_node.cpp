@@ -154,15 +154,18 @@ public:
 
     if (enable_fifo_output) {
       mkfifo(output_fifo_path.c_str(), 0666);
-      output_fifo_fd_ = open(output_fifo_path.c_str(), O_RDWR | O_NONBLOCK);
+      output_fifo_fd_ = open(output_fifo_path.c_str(), O_RDWR);
       if (output_fifo_fd_ < 0) {
         RCLCPP_ERROR(
           this->get_logger(), "Failed to open output FIFO: %s",
           output_fifo_path.c_str());
       } else {
-        RCLCPP_INFO(this->get_logger(), "Output FIFO opened: %s", output_fifo_path.c_str());
+        RCLCPP_INFO(
+          this->get_logger(), "Output FIFO opened (Blocking): %s",
+          output_fifo_path.c_str());
       }
     }
+
 
     if (enable_fifo_input) {
       mkfifo(input_fifo_path.c_str(), 0666);
@@ -257,8 +260,12 @@ private:
     {
       std::lock_guard<std::mutex> lock(mutex_);
 
+      bool has_data = false;
       // 1. Collect from ROS topics
       for (int i = 0; i < 8; ++i) {
+        if (!input_buffers_[i].empty()) {
+          has_data = true;
+        }
         size_t to_pull = std::min(input_buffers_[i].size(), static_cast<size_t>(values_per_chunk_));
         float gain = input_gains_[i];
         for (size_t j = 0; j < to_pull; ++j) {
@@ -272,11 +279,16 @@ private:
         std::vector<int16_t> fifo_buffer(values_per_chunk_);
         ssize_t bytes_read = read(input_fifo_fd_, fifo_buffer.data(), values_per_chunk_ * 2);
         if (bytes_read > 0) {
+          has_data = true;
           size_t samples_read = bytes_read / 2;
           for (size_t j = 0; j < samples_read; ++j) {
             mixed_data[j] += static_cast<int32_t>(fifo_buffer[j] * fifo_gain_);
           }
         }
+      }
+
+      if (!has_data) {
+        return;  // Prevent silence gaps
       }
     }
 
