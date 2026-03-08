@@ -43,8 +43,8 @@ The mixer node takes multiple audio inputs and aggregates them into one master o
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `input_count` | int | `4` | Number of input topics (`in0`...`inN-1`). |
-| `enable_fifo_output` | bool | `false` | Enable writing to a FIFO pipe (Env: `MIXER_ENABLE_FIFO_OUTPUT`) |
-| `output_fifo` | string | `/tmp/audio_master_pipe`| Path to the master output FIFO (Env: `MIXER_OUTPUT_FIFO`) |
+| `output_fifo` | string | `""` | Path to the output FIFO pipe. Enables FIFO output if set. (Env: `MIXER_OUTPUT_FIFO`) |
+| `heartbeat` | bool | `true` | Generate silent frames if no input is received (keeps stream alive). (Env: `MIXER_HEARTBEAT`) |
 | `enable_stdout_output`| bool | `false` | Write raw audio to stdout for piping (Env: `MIXER_ENABLE_STDOUT_OUTPUT`) |
 | `enable_topic_output` | bool | `true` | Publish mixed audio to ROS topic `out` (Env: `MIXER_ENABLE_TOPIC_OUTPUT`) |
 | `enable_fifo_input` | bool | `false` | Read from an additional input FIFO pipe (Env: `MIXER_ENABLE_FIFO_INPUT`) |
@@ -96,11 +96,12 @@ Bidirectional conversion between raw audio streams (FIFO/Pipe/stdin) and ROS mes
 
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `mode` | string | `fifo_to_ros` | Mode: `fifo_to_ros`, `stdin_to_ros`, or `ros_to_fifo` (Env: `CONVERT_MODE`) |
-| `fifo_path` | string | `/tmp/audio_pipe`| Path to the FIFO pipe (Env: `CONVERT_FIFO_PATH`) |
-| `sample_rate` | int | `44100` | Audio sample rate in Hz (Env: `CONVERT_SAMPLE_RATE`) |
-| `channels` | int | `2` | Number of audio channels (Env: `CONVERT_CHANNELS`) |
-| `chunk_ms` | int | `20` | Chunk size in ms per ROS message (Env: `CONVERT_CHUNK_MS`) |
+| `mode` | string | `fifo_to_ros` | Operation mode (`fifo_to_ros`, `stdin_to_ros`, `ros_to_fifo`) |
+| `fifo_path` | string | `/tmp/audio_pipe` | Path to the input or output FIFO |
+| `heartbeat` | bool | `true` | Generate silent frames if no input is received in `ros_to_fifo` mode. (Env: `CONVERT_HEARTBEAT`) |
+| `sample_rate` | int | `44100` | Audio sample rate (Hz) |
+| `channels` | int | `2` | Number of audio channels |
+| `chunk_ms` | int | `20` | Audio chunk size per ROS message (ms) (Env: `CONVERT_CHUNK_MS`) |
 
 #### Topics
 

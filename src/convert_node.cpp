@@ -267,7 +267,7 @@ next_loop:
   std::thread read_thread_;
   rclcpp::Publisher<std_msgs::msg::Int16MultiArray>::SharedPtr pub_;
   rclcpp::Subscription<std_msgs::msg::Int16MultiArray>::SharedPtr sub_;
-  
+
   rclcpp::TimerBase::SharedPtr heartbeat_timer_;
   rclcpp::Time last_audio_time_;
   std::mutex mutex_;
