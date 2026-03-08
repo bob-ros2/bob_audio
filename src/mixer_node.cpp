@@ -148,6 +148,9 @@ public:
       "chunk_ms",
       get_env("MIXER_CHUNK_MS", 20), descriptor);
 
+    descriptor.description = "Number of input topics (in0, in1, ...) (Default: 4).";
+    input_count_ = this->declare_parameter("input_count", 4, descriptor);
+
     // --- Internal State ---
     samples_per_chunk_ = (sample_rate_ * chunk_ms) / 1000;
     values_per_chunk_ = samples_per_chunk_ * channels_;
@@ -181,8 +184,8 @@ public:
       pub_ = this->create_publisher<std_msgs::msg::Int16MultiArray>("out", 10);
     }
 
-    // Create 8 input subscribers
-    for (int i = 0; i < 8; ++i) {
+    // Create input subscribers
+    for (int i = 0; i < input_count_; ++i) {
       std::string topic = "in" + std::to_string(i);
       
       descriptor.description = "Number of channels for " + topic + " (Default: same as mixer).";
@@ -199,10 +202,10 @@ public:
       input_gains_.push_back(1.0f);
     }
 
-    // Dynamic Level Control Subscriber
-    levels_sub_ = this->create_subscription<std_msgs::msg::String>(
-      "levels", 10,
-      std::bind(&MixerNode::levels_callback, this, std::placeholders::_1));
+    // Dynamic Control Subscriber (Gain and Channels)
+    control_sub_ = this->create_subscription<std_msgs::msg::String>(
+      "control", 10,
+      std::bind(&MixerNode::control_callback, this, std::placeholders::_1));
 
     // Timer for mixing loop
     timer_ = this->create_wall_timer(
@@ -210,8 +213,8 @@ public:
       std::bind(&MixerNode::mix_loop, this));
 
     RCLCPP_INFO(
-      this->get_logger(), "Mixer Node started. Rate: %dHz, Channels: %d, Chunk: %dms",
-      sample_rate_, channels_, chunk_ms);
+      this->get_logger(), "Mixer Node started. Rate: %dHz, Channels: %d, Chunk: %dms, Inputs: %d",
+      sample_rate_, channels_, chunk_ms, input_count_);
   }
 
   ~MixerNode()
@@ -230,31 +233,53 @@ private:
     }
   }
 
-  void levels_callback(const std_msgs::msg::String::SharedPtr msg)
+  void control_callback(const std_msgs::msg::String::SharedPtr msg)
   {
     try {
       auto j = nlohmann::json::parse(msg->data);
       std::lock_guard<std::mutex> lock(mutex_);
 
-      for (int i = 0; i < 8; ++i) {
-        std::string key = "in" + std::to_string(i);
-        if (j.contains(key) && j[key].is_number()) {
-          input_gains_[i] = j[key].get<float>();
+      for (int i = 0; i < input_count_; ++i) {
+        std::string base_key = "in" + std::to_string(i);
+        
+        // --- Structured Object Support ---
+        // Example: {"in0": {"gain": 0.5, "channels": 1}}
+        if (j.contains(base_key) && j[base_key].is_object()) {
+          if (j[base_key].contains("gain") && j[base_key]["gain"].is_number()) {
+            input_gains_[i] = j[base_key]["gain"].get<float>();
+            RCLCPP_INFO(this->get_logger(), "Set gain for in%d to %.2f", i, input_gains_[i]);
+          }
+          if (j[base_key].contains("channels") && j[base_key]["channels"].is_number()) {
+            input_topic_channels_[i] = j[base_key]["channels"].get<int>();
+            RCLCPP_INFO(this->get_logger(), "Set channels for in%d to %d", i, input_topic_channels_[i]);
+          }
+        }
+
+        // --- Flat Key Support ---
+        // Example: {"in0_gain": 0.5, "in0_channels": 1}
+        std::string gain_key = base_key + "_gain";
+        if (j.contains(gain_key) && j[gain_key].is_number()) {
+          input_gains_[i] = j[gain_key].get<float>();
           RCLCPP_INFO(this->get_logger(), "Set gain for in%d to %.2f", i, input_gains_[i]);
+        }
+        std::string chan_key = base_key + "_channels";
+        if (j.contains(chan_key) && j[chan_key].is_number()) {
+          input_topic_channels_[i] = j[chan_key].get<int>();
+          RCLCPP_INFO(this->get_logger(), "Set channels for in%d to %d", i, input_topic_channels_[i]);
         }
       }
 
+      // Master and FIFO gains
       if (j.contains("fifo") && j["fifo"].is_number()) {
         fifo_gain_ = j["fifo"].get<float>();
         RCLCPP_INFO(this->get_logger(), "Set gain for fifo to %.2f", fifo_gain_);
       }
-
       if (j.contains("master") && j["master"].is_number()) {
         master_gain_ = j["master"].get<float>();
         RCLCPP_INFO(this->get_logger(), "Set master gain to %.2f", master_gain_);
       }
     } catch (const std::exception & e) {
-      RCLCPP_WARN(this->get_logger(), "Failed to parse levels JSON: %s", e.what());
+      RCLCPP_WARN(this->get_logger(), "Failed to parse control JSON: %s", e.what());
     }
   }
 
@@ -267,7 +292,7 @@ private:
 
       bool has_data = false;
       // 1. Collect from ROS topics
-      for (int i = 0; i < 8; ++i) {
+      for (int i = 0; i < input_count_; ++i) {
         if (input_buffers_[i].empty()) continue;
         has_data = true;
 
@@ -355,6 +380,7 @@ private:
   int channels_;
   int samples_per_chunk_;
   int values_per_chunk_;
+  int input_count_;
 
   int output_fifo_fd_ = -1;
   int input_fifo_fd_ = -1;
@@ -368,7 +394,7 @@ private:
   float master_gain_ = 1.0f;
   std::mutex mutex_;
 
-  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr levels_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr control_sub_;
   rclcpp::Publisher<std_msgs::msg::Int16MultiArray>::SharedPtr pub_;
   rclcpp::TimerBase::SharedPtr timer_;
 };

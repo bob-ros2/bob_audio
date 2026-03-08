@@ -41,6 +41,7 @@ The mixer node takes multiple audio inputs and aggregates them into one master o
 
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
+| `input_count` | int | `4` | Number of input topics (`in0`...`inN-1`). |
 | `enable_fifo_output` | bool | `false` | Enable writing to a FIFO pipe (Env: `MIXER_ENABLE_FIFO_OUTPUT`) |
 | `output_fifo` | string | `/tmp/audio_master_pipe`| Path to the master output FIFO (Env: `MIXER_OUTPUT_FIFO`) |
 | `enable_stdout_output`| bool | `false` | Write raw audio to stdout for piping (Env: `MIXER_ENABLE_STDOUT_OUTPUT`) |
@@ -54,28 +55,36 @@ The mixer node takes multiple audio inputs and aggregates them into one master o
 #### Topics
 
 - **Subscribers**: 
-  - `in0` ... `in7` (`std_msgs/msg/Int16MultiArray`): Audio input streams.
-  - `levels` (`std_msgs/msg/String`): JSON-based volume control.
+  - `in0` ... `inN-1` (`std_msgs/msg/Int16MultiArray`): Audio input streams.
+  - `control` (`std_msgs/msg/String`): JSON-based volume and channel control.
 - **Publishers**: 
   - `out` (`std_msgs/msg/Int16MultiArray`): Mixed master output.
 
-#### Real-time Volume Control (JSON)
+#### Dynamic Control (JSON)
 
-You can adjust volumes on the fly by sending a JSON string to the `levels` topic.
+You can adjust volumes and input channel counts on the fly by sending a JSON string to the `control` topic.
 
-**Format:**
+**Format (Nested Object):**
 ```json
 {
-  "in0": 0.5,    // Set input 0 to 50%
-  "in1": 1.2,    // Set input 1 to 120%
-  "fifo": 0.8,   // Set FIFO input gain
-  "master": 0.7  // Set global master gain
+  "in0": {"gain": 0.5, "channels": 1},
+  "in1": {"gain": 1.2},
+  "master": {"gain": 0.7}
+}
+```
+
+**Format (Flat Keys):**
+```json
+{
+  "in0_gain": 0.2,
+  "in1_channels": 2,
+  "fifo": 0.8
 }
 ```
 
 **Example:**
 ```bash
-ros2 topic pub --once /levels std_msgs/msg/String "{data: '{\"in0\": 0.2, \"master\": 0.5}'}"
+ros2 topic pub --once /control std_msgs/msg/String "{data: '{\"in0\": {\"gain\": 0.2, \"channels\": 1}, \"master\": 0.5}'}"
 ```
 
 ### 2. Convert Node (`convert`)
