@@ -90,18 +90,11 @@ public:
 
     // --- Output Parameters ---
     descriptor.description =
-      "Enable writing mixed audio to a FIFO pipe "
-      "(Default: false, Env: MIXER_ENABLE_FIFO_OUTPUT).";
-    bool enable_fifo_output = this->declare_parameter(
-      "enable_fifo_output",
-      get_env("MIXER_ENABLE_FIFO_OUTPUT", false), descriptor);
-
-    descriptor.description =
-      "Path to the output FIFO pipe "
-      "(Default: /tmp/audio_master_pipe, Env: MIXER_OUTPUT_FIFO).";
+      "Path to the output FIFO pipe. If set, FIFO output is enabled. "
+      "(Default: '', Env: MIXER_OUTPUT_FIFO).";
     std::string output_fifo_path = this->declare_parameter(
       "output_fifo",
-      get_env("MIXER_OUTPUT_FIFO", std::string("/tmp/audio_master_pipe")), descriptor);
+      get_env("MIXER_OUTPUT_FIFO", std::string("")), descriptor);
 
     descriptor.description =
       "Enable writing mixed audio to stdout for piping "
@@ -116,6 +109,13 @@ public:
     bool enable_topic_output = this->declare_parameter(
       "enable_topic_output",
       get_env("MIXER_ENABLE_TOPIC_OUTPUT", true), descriptor);
+
+    descriptor.description =
+      "Generate silent frames if no input audio is received "
+      "(Default: true, Env: MIXER_HEARTBEAT).";
+    heartbeat_ = this->declare_parameter(
+      "heartbeat",
+      get_env("MIXER_HEARTBEAT", true), descriptor);
 
     // --- Input Parameters ---
     descriptor.description =
@@ -155,7 +155,7 @@ public:
     samples_per_chunk_ = (sample_rate_ * chunk_ms) / 1000;
     values_per_chunk_ = samples_per_chunk_ * channels_;
 
-    if (enable_fifo_output) {
+    if (!output_fifo_path.empty()) {
       mkfifo(output_fifo_path.c_str(), 0666);
       output_fifo_fd_ = open(output_fifo_path.c_str(), O_RDWR);
       if (output_fifo_fd_ < 0) {
@@ -348,7 +348,7 @@ private:
         }
       }
 
-      if (!has_data) {
+      if (!has_data && !heartbeat_) {
         return;  // Prevent silence gaps
       }
     }
@@ -397,6 +397,7 @@ private:
   int samples_per_chunk_;
   int values_per_chunk_;
   int input_count_;
+  bool heartbeat_;
 
   int output_fifo_fd_ = -1;
   int input_fifo_fd_ = -1;
