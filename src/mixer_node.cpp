@@ -184,6 +184,11 @@ public:
     // Create 8 input subscribers
     for (int i = 0; i < 8; ++i) {
       std::string topic = "in" + std::to_string(i);
+      
+      descriptor.description = "Number of channels for " + topic + " (Default: same as mixer).";
+      int in_ch = this->declare_parameter(topic + "_channels", channels_, descriptor);
+      input_topic_channels_.push_back(in_ch);
+
       subs_.push_back(
         this->create_subscription<std_msgs::msg::Int16MultiArray>(
           topic, 10,
@@ -263,14 +268,29 @@ private:
       bool has_data = false;
       // 1. Collect from ROS topics
       for (int i = 0; i < 8; ++i) {
-        if (!input_buffers_[i].empty()) {
-          has_data = true;
-        }
-        size_t to_pull = std::min(input_buffers_[i].size(), static_cast<size_t>(values_per_chunk_));
+        if (input_buffers_[i].empty()) continue;
+        has_data = true;
+
+        int in_ch = input_topic_channels_[i];
         float gain = input_gains_[i];
-        for (size_t j = 0; j < to_pull; ++j) {
-          mixed_data[j] += static_cast<int32_t>(input_buffers_[i].front() * gain);
-          input_buffers_[i].pop_front();
+
+        if (in_ch == 1 && channels_ == 2) {
+          // Upmix Mono to Stereo
+          size_t samples_to_pull = std::min(input_buffers_[i].size(), static_cast<size_t>(samples_per_chunk_));
+          for (size_t j = 0; j < samples_to_pull; ++j) {
+            int16_t sample = input_buffers_[i].front();
+            input_buffers_[i].pop_front();
+            int32_t val = static_cast<int32_t>(sample * gain);
+            mixed_data[j * 2] += val;     // Left
+            mixed_data[j * 2 + 1] += val; // Right
+          }
+        } else {
+          // Same channel count (hopefully)
+          size_t values_to_pull = std::min(input_buffers_[i].size(), static_cast<size_t>(values_per_chunk_));
+          for (size_t j = 0; j < values_to_pull; ++j) {
+            mixed_data[j] += static_cast<int32_t>(input_buffers_[i].front() * gain);
+            input_buffers_[i].pop_front();
+          }
         }
       }
 
@@ -341,6 +361,7 @@ private:
   bool enable_stdout_output_ = false;
 
   std::vector<rclcpp::Subscription<std_msgs::msg::Int16MultiArray>::SharedPtr> subs_;
+  std::vector<int> input_topic_channels_;
   std::vector<std::deque<int16_t>> input_buffers_;
   std::vector<float> input_gains_;
   float fifo_gain_ = 1.0f;
