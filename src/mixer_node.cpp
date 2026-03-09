@@ -157,14 +157,14 @@ public:
 
     if (!output_fifo_path.empty()) {
       mkfifo(output_fifo_path.c_str(), 0666);
-      output_fifo_fd_ = open(output_fifo_path.c_str(), O_RDWR);
+      output_fifo_fd_ = open(output_fifo_path.c_str(), O_RDWR | O_NONBLOCK);
       if (output_fifo_fd_ < 0) {
         RCLCPP_ERROR(
           this->get_logger(), "Failed to open output FIFO: %s",
           output_fifo_path.c_str());
       } else {
         RCLCPP_INFO(
-          this->get_logger(), "Output FIFO opened (Blocking): %s",
+          this->get_logger(), "Output FIFO opened (Non-Blocking): %s",
           output_fifo_path.c_str());
       }
     }
@@ -357,28 +357,29 @@ private:
           }
         }
 
-        // Pull as long as we have full chunks
-        if (input_buffers_[i].size() < required) {
-           input_active_[i] = false; // Reset if buffer depleted
-           continue;
-        }
-        
-        has_data = true;
-
-        if (in_ch == 1 && channels_ == 2) {
-          // Upmix Mono to Stereo
-          for (size_t j = 0; j < required; ++j) {
-            int16_t sample = input_buffers_[i].front();
-            input_buffers_[i].pop_front();
-            int32_t val = static_cast<int32_t>(sample * gain);
-            mixed_data[j * 2] += val;  // Left
-            mixed_data[j * 2 + 1] += val;  // Right
+        // Pull if we have enough for a FULL chunk
+        if (input_buffers_[i].size() >= required) {
+          has_data = true;
+          if (in_ch == 1 && channels_ == 2) {
+            // Upmix Mono to Stereo
+            for (size_t j = 0; j < required; ++j) {
+              int16_t sample = input_buffers_[i].front();
+              input_buffers_[i].pop_front();
+              int32_t val = static_cast<int32_t>(sample * gain);
+              mixed_data[j * 2] += val;  // Left
+              mixed_data[j * 2 + 1] += val;  // Right
+            }
+          } else {
+            // Same channel count
+            for (size_t j = 0; j < required; ++j) {
+              mixed_data[j] += static_cast<int32_t>(input_buffers_[i].front() * gain);
+              input_buffers_[i].pop_front();
+            }
           }
         } else {
-          // Same channel count
-          for (size_t j = 0; j < required; ++j) {
-            mixed_data[j] += static_cast<int32_t>(input_buffers_[i].front() * gain);
-            input_buffers_[i].pop_front();
+          // If we are REALLY empty, reset the cushion for the next burst
+          if (input_buffers_[i].empty()) {
+            input_active_[i] = false;
           }
         }
       }
@@ -402,7 +403,9 @@ private:
               fifo_input_buffer_.pop_front();
             }
           } else {
-            fifo_active_ = false; // Reset cushion
+             if (fifo_input_buffer_.empty()) {
+               fifo_active_ = false; // Reset cushion if totally empty
+             }
           }
         }
       }
@@ -435,7 +438,11 @@ private:
 
     // 2. FIFO Output
     if (output_fifo_fd_ >= 0) {
-      write(output_fifo_fd_, final_data.data(), values_per_chunk_ * 2);
+      if (write(output_fifo_fd_, final_data.data(), values_per_chunk_ * 2) < 0) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+           RCLCPP_DEBUG(this->get_logger(), "FIFO write error: %s", strerror(errno));
+        }
+      }
     }
 
     // 3. Stdout Output (FFmpeg pipe)
