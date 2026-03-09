@@ -256,13 +256,13 @@ private:
         for (size_t i = 0; i < samples_read; ++i) {
           fifo_input_buffer_.push_back(read_buffer[i]);
         }
-        // Cap buffer to 1 second of audio (176400 bytes for 44.1k Stereo) to prevent lag
-        size_t max_fifo_samples = sample_rate_ * channels_ * 1.0;
+        // Cap buffer to 30 seconds of audio to prevent massive lag
+        size_t max_fifo_samples = sample_rate_ * channels_ * 30.0;
         while (fifo_input_buffer_.size() > max_fifo_samples) {
           fifo_input_buffer_.pop_front();
         }
       } else {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
       }
     }
   }
@@ -273,8 +273,8 @@ private:
     for (const auto & val : msg->data) {
       input_buffers_[index].push_back(val);
     }
-    // Limit buffer to 1000ms
-    size_t max_topic_samples = sample_rate_ * input_topic_channels_[index] * 1.0;
+    // Limit buffer to 30 seconds to allow for bursts (e.g. TTS) without dropping data
+    size_t max_topic_samples = sample_rate_ * input_topic_channels_[index] * 30.0;
     while (input_buffers_[index].size() > max_topic_samples) {
       input_buffers_[index].pop_front();
     }
