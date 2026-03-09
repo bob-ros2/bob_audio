@@ -172,11 +172,12 @@ public:
 
     if (enable_fifo_input) {
       mkfifo(input_fifo_path.c_str(), 0666);
-      input_fifo_fd_ = open(input_fifo_path.c_str(), O_RDWR);
+      // Open O_RDWR to prevent EOF when no one is writing, but O_NONBLOCK for the thread
+      input_fifo_fd_ = open(input_fifo_path.c_str(), O_RDWR | O_NONBLOCK);
       if (input_fifo_fd_ < 0) {
         RCLCPP_ERROR(this->get_logger(), "Failed to open input FIFO: %s", input_fifo_path.c_str());
       } else {
-        RCLCPP_INFO(this->get_logger(), "Input FIFO opened (Buffered): %s", input_fifo_path.c_str());
+        RCLCPP_INFO(this->get_logger(), "Input FIFO opened (Buffered/Non-Blocking): %s", input_fifo_path.c_str());
         fifo_input_thread_ = std::thread(&MixerNode::fifo_input_loop, this);
       }
     }
@@ -256,13 +257,16 @@ private:
         for (size_t i = 0; i < samples_read; ++i) {
           fifo_input_buffer_.push_back(read_buffer[i]);
         }
-        // Cap buffer to 30 seconds of audio to prevent massive lag
-        size_t max_fifo_samples = sample_rate_ * channels_ * 30.0;
-        while (fifo_input_buffer_.size() > max_fifo_samples) {
-          fifo_input_buffer_.pop_front();
+        // Cap buffer to 300 seconds (prevent OOM)
+        size_t max_fifo_samples = sample_rate_ * channels_ * 300.0;
+        if (fifo_input_buffer_.size() > max_fifo_samples) {
+          fifo_input_buffer_.clear();
+          fifo_active_ = false;
+          RCLCPP_WARN(this->get_logger(), "FIFO buffer overflow, clearing.");
         }
       } else {
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        // Sleep slightly longer when empty to save CPU
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
       }
     }
   }
@@ -392,8 +396,9 @@ private:
     if (input_fifo_fd_ >= 0) {
       std::lock_guard<std::mutex> lock(fifo_mutex_);
 
+      // Startup Cushion for FIFO: 10 chunks (200ms) for music stability
       if (!fifo_active_) {
-        if (fifo_input_buffer_.size() >= static_cast<size_t>(values_per_chunk_) * 4) {
+        if (fifo_input_buffer_.size() >= static_cast<size_t>(values_per_chunk_) * 10) {
           fifo_active_ = true;
         }
       }
@@ -406,6 +411,9 @@ private:
             fifo_input_buffer_.pop_front();
           }
         } else {
+          // Soft dropout: if we have some data but not enough for a chunk, 
+          // we just wait WITHOUT resetting the active flag immediately.
+          // Only reset if truly empty.
           if (fifo_input_buffer_.empty()) {
             fifo_active_ = false;
           }
