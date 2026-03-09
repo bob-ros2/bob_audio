@@ -210,6 +210,7 @@ public:
           }, sub_options));
       input_buffers_.emplace_back();
       input_gains_.push_back(1.0f);
+      input_active_.push_back(false);
     }
 
     // Dynamic Control Subscriber
@@ -272,8 +273,8 @@ private:
     for (const auto & val : msg->data) {
       input_buffers_[index].push_back(val);
     }
-    // Limit buffer to 500ms
-    size_t max_topic_samples = sample_rate_ * input_topic_channels_[index] * 0.5;
+    // Limit buffer to 1000ms
+    size_t max_topic_samples = sample_rate_ * input_topic_channels_[index] * 1.0;
     while (input_buffers_[index].size() > max_topic_samples) {
       input_buffers_[index].pop_front();
     }
@@ -347,8 +348,21 @@ private:
         size_t required = (in_ch == 1 && channels_ == 2) ?
           static_cast<size_t>(samples_per_chunk_) : static_cast<size_t>(values_per_chunk_);
 
-        // Only pull if we have enough for a FULL chunk to prevent staccato gaps
-        if (input_buffers_[i].size() < required) {continue;}
+        // Startup Cushion: Wait for some data to accumulate before starting the stream
+        if (!input_active_[i]) {
+          if (input_buffers_[i].size() >= required * 4) {
+            input_active_[i] = true;
+          } else {
+            continue;
+          }
+        }
+
+        // Pull as long as we have full chunks
+        if (input_buffers_[i].size() < required) {
+           input_active_[i] = false; // Reset if buffer depleted
+           continue;
+        }
+        
         has_data = true;
 
         if (in_ch == 1 && channels_ == 2) {
@@ -372,12 +386,23 @@ private:
       // 2. Collect from input FIFO buffer if enabled
       if (input_fifo_fd_ >= 0) {
         std::lock_guard<std::mutex> lock(fifo_mutex_);
-        // Only pull if we have enough for a FULL chunk
-        if (fifo_input_buffer_.size() >= static_cast<size_t>(values_per_chunk_)) {
-          has_data = true;
-          for (size_t j = 0; j < static_cast<size_t>(values_per_chunk_); ++j) {
-            mixed_data[j] += static_cast<int32_t>(fifo_input_buffer_.front() * fifo_gain_);
-            fifo_input_buffer_.pop_front();
+        
+        // Startup Cushion for FIFO
+        if (!fifo_active_) {
+           if (fifo_input_buffer_.size() >= static_cast<size_t>(values_per_chunk_) * 4) {
+              fifo_active_ = true;
+           }
+        }
+
+        if (fifo_active_) {
+          if (fifo_input_buffer_.size() >= static_cast<size_t>(values_per_chunk_)) {
+            has_data = true;
+            for (size_t j = 0; j < static_cast<size_t>(values_per_chunk_); ++j) {
+              mixed_data[j] += static_cast<int32_t>(fifo_input_buffer_.front() * fifo_gain_);
+              fifo_input_buffer_.pop_front();
+            }
+          } else {
+            fifo_active_ = false; // Reset cushion
           }
         }
       }
@@ -441,7 +466,9 @@ private:
   std::vector<int> input_topic_channels_;
   std::vector<std::deque<int16_t>> input_buffers_;
   std::vector<float> input_gains_;
+  std::vector<bool> input_active_;
   float fifo_gain_ = 1.0f;
+  bool fifo_active_ = false;
   float master_gain_ = 1.0f;
   std::mutex mutex_;
 
