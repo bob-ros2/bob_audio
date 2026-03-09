@@ -219,6 +219,10 @@ public:
       "control", 10,
       std::bind(&MixerNode::control_callback, this, std::placeholders::_1), sub_options);
 
+    // Register parameter callback for dynamic updates
+    param_cb_handle_ = this->add_on_set_parameters_callback(
+      std::bind(&MixerNode::on_params_set, this, std::placeholders::_1));
+
     // Timer for mixing loop
     timer_ = this->create_wall_timer(
       std::chrono::milliseconds(chunk_ms),
@@ -297,33 +301,37 @@ private:
         std::string base_key = "in" + std::to_string(i);
 
         // --- Structured Object Support ---
-        // Example: {"in0": {"gain": 0.5, "channels": 1}}
         if (j.contains(base_key) && j[base_key].is_object()) {
           if (j[base_key].contains("gain") && j[base_key]["gain"].is_number()) {
             input_gains_[i] = j[base_key]["gain"].get<float>();
-            RCLCPP_INFO(this->get_logger(), "Set gain for in%d to %.2f", i, input_gains_[i]);
+            RCLCPP_INFO(this->get_logger(), "Set gain for in%d to %.2f (JSON)", i, input_gains_[i]);
           }
           if (j[base_key].contains("channels") && j[base_key]["channels"].is_number()) {
-            input_topic_channels_[i] = j[base_key]["channels"].get<int>();
-            RCLCPP_INFO(
-              this->get_logger(), "Set channels for in%d to %d", i,
-              input_topic_channels_[i]);
+            int new_ch = j[base_key]["channels"].get<int>();
+            if (new_ch != input_topic_channels_[i]) {
+              input_topic_channels_[i] = new_ch;
+              input_buffers_[i].clear(); 
+              input_active_[i] = false;
+              RCLCPP_INFO(this->get_logger(), "Dynamic channel switch for in%d -> %d (JSON). Buffer flushed.", i, new_ch);
+            }
           }
         }
 
         // --- Flat Key Support ---
-        // Example: {"in0_gain": 0.5, "in0_channels": 1}
         std::string gain_key = base_key + "_gain";
         if (j.contains(gain_key) && j[gain_key].is_number()) {
           input_gains_[i] = j[gain_key].get<float>();
-          RCLCPP_INFO(this->get_logger(), "Set gain for in%d to %.2f", i, input_gains_[i]);
+          RCLCPP_INFO(this->get_logger(), "Set gain for in%d to %.2f (JSON-Flat)", i, input_gains_[i]);
         }
         std::string chan_key = base_key + "_channels";
         if (j.contains(chan_key) && j[chan_key].is_number()) {
-          input_topic_channels_[i] = j[chan_key].get<int>();
-          RCLCPP_INFO(
-            this->get_logger(), "Set channels for in%d to %d", i,
-            input_topic_channels_[i]);
+          int new_ch = j[chan_key].get<int>();
+          if (new_ch != input_topic_channels_[i]) {
+            input_topic_channels_[i] = new_ch;
+            input_buffers_[i].clear();
+            input_active_[i] = false;
+            RCLCPP_INFO(this->get_logger(), "Dynamic channel switch for in%d -> %d (JSON-Flat). Buffer flushed.", i, new_ch);
+          }
         }
       }
 
@@ -339,6 +347,42 @@ private:
     } catch (const std::exception & e) {
       RCLCPP_WARN(this->get_logger(), "Failed to parse control JSON: %s", e.what());
     }
+  }
+
+  rcl_interfaces::msg::SetParametersResult on_params_set(
+    const std::vector<rclcpp::Parameter> & parameters)
+  {
+    rcl_interfaces::msg::SetParametersResult result;
+    result.successful = true;
+    
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const auto & param : parameters) {
+      std::string name = param.get_name();
+      
+      // Master and FIFO gains
+      if (name == "master_gain") {
+        master_gain_ = param.as_double();
+      } else if (name == "fifo_gain") {
+        fifo_gain_ = param.as_double();
+      }
+      
+      // Input topic specific params
+      for (int i = 0; i < input_count_; ++i) {
+        std::string base = "in" + std::to_string(i);
+        if (name == base + "_gain") {
+          input_gains_[i] = param.as_double();
+        } else if (name == base + "_channels") {
+          int new_ch = param.as_int();
+          if (new_ch != input_topic_channels_[i]) {
+            input_topic_channels_[i] = new_ch;
+            input_buffers_[i].clear(); // Flush!
+            input_active_[i] = false;
+            RCLCPP_INFO(this->get_logger(), "Dynamic param change: %s -> %d. Buffer flushed.", name.c_str(), new_ch);
+          }
+        }
+      }
+    }
+    return result;
   }
 
   void mix_loop()
@@ -487,6 +531,7 @@ private:
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr control_sub_;
   rclcpp::Publisher<std_msgs::msg::Int16MultiArray>::SharedPtr pub_;
   rclcpp::TimerBase::SharedPtr timer_;
+  OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
 
   std::thread fifo_input_thread_;
   std::deque<int16_t> fifo_input_buffer_;
