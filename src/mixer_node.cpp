@@ -177,7 +177,9 @@ public:
       if (input_fifo_fd_ < 0) {
         RCLCPP_ERROR(this->get_logger(), "Failed to open input FIFO: %s", input_fifo_path.c_str());
       } else {
-        RCLCPP_INFO(this->get_logger(), "Input FIFO opened (Buffered/Non-Blocking): %s", input_fifo_path.c_str());
+        RCLCPP_INFO(
+          this->get_logger(), "Input FIFO opened (Buffered/Non-Blocking): %s",
+          input_fifo_path.c_str());
         fifo_input_thread_ = std::thread(&MixerNode::fifo_input_loop, this);
       }
     }
@@ -287,7 +289,8 @@ private:
     if (input_buffers_[index].size() > max_topic_samples) {
       input_buffers_[index].clear();
       input_active_[index] = false;
-      RCLCPP_WARN(this->get_logger(), "Buffer overflow for input %d, clearing to prevent OOM.", index);
+      RCLCPP_WARN(
+        this->get_logger(), "Buffer overflow for input %d, clearing to prevent OOM.", index);
     }
   }
 
@@ -310,9 +313,12 @@ private:
             int new_ch = j[base_key]["channels"].get<int>();
             if (new_ch != input_topic_channels_[i]) {
               input_topic_channels_[i] = new_ch;
-              input_buffers_[i].clear(); 
+              input_buffers_[i].clear();
               input_active_[i] = false;
-              RCLCPP_INFO(this->get_logger(), "Dynamic channel switch for in%d -> %d (JSON). Buffer flushed.", i, new_ch);
+              RCLCPP_INFO(
+                this->get_logger(),
+                "Dynamic channel switch for in%d -> %d (JSON). Buffer flushed.", i,
+                new_ch);
             }
           }
         }
@@ -321,7 +327,8 @@ private:
         std::string gain_key = base_key + "_gain";
         if (j.contains(gain_key) && j[gain_key].is_number()) {
           input_gains_[i] = j[gain_key].get<float>();
-          RCLCPP_INFO(this->get_logger(), "Set gain for in%d to %.2f (JSON-Flat)", i, input_gains_[i]);
+          RCLCPP_INFO(
+            this->get_logger(), "Set gain for in%d to %.2f (JSON-Flat)", i, input_gains_[i]);
         }
         std::string chan_key = base_key + "_channels";
         if (j.contains(chan_key) && j[chan_key].is_number()) {
@@ -330,7 +337,10 @@ private:
             input_topic_channels_[i] = new_ch;
             input_buffers_[i].clear();
             input_active_[i] = false;
-            RCLCPP_INFO(this->get_logger(), "Dynamic channel switch for in%d -> %d (JSON-Flat). Buffer flushed.", i, new_ch);
+            RCLCPP_INFO(
+              this->get_logger(),
+              "Dynamic channel switch for in%d -> %d (JSON-Flat). Buffer flushed.", i,
+              new_ch);
           }
         }
       }
@@ -354,18 +364,18 @@ private:
   {
     rcl_interfaces::msg::SetParametersResult result;
     result.successful = true;
-    
+
     std::lock_guard<std::mutex> lock(mutex_);
     for (const auto & param : parameters) {
       std::string name = param.get_name();
-      
+
       // Master and FIFO gains
       if (name == "master_gain") {
         master_gain_ = param.as_double();
       } else if (name == "fifo_gain") {
         fifo_gain_ = param.as_double();
       }
-      
+
       // Input topic specific params
       for (int i = 0; i < input_count_; ++i) {
         std::string base = "in" + std::to_string(i);
@@ -375,9 +385,11 @@ private:
           int new_ch = param.as_int();
           if (new_ch != input_topic_channels_[i]) {
             input_topic_channels_[i] = new_ch;
-            input_buffers_[i].clear(); // Flush!
+            input_buffers_[i].clear();  // Flush!
             input_active_[i] = false;
-            RCLCPP_INFO(this->get_logger(), "Dynamic param change: %s -> %d. Buffer flushed.", name.c_str(), new_ch);
+            RCLCPP_INFO(
+              this->get_logger(), "Dynamic param change: %s -> %d. Buffer flushed.",
+              name.c_str(), new_ch);
           }
         }
       }
@@ -455,7 +467,7 @@ private:
             fifo_input_buffer_.pop_front();
           }
         } else {
-          // Soft dropout: if we have some data but not enough for a chunk, 
+          // Soft dropout: if we have some data but not enough for a chunk,
           // we just wait WITHOUT resetting the active flag immediately.
           // Only reset if truly empty.
           if (fifo_input_buffer_.empty()) {
