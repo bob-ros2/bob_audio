@@ -8,6 +8,7 @@ Changelog for package bob_audio
 * Multi-threaded Mixer with dynamic input count and Mono-to-Stereo upmixing
 * Redesigned 'control' topic for live gain and channel configuration
 * Simplified FIFO output (auto-enable) and 'heartbeat' silence generator to keep streams alive
+* Improved flow control and buffering logic to handle large audio bursts (e.g. from TTS) without truncation
 * Enhanced audio stability with 300s jitter buffers and non-blocking I/O to prevent dropouts and hangs
 * Contributors: Bob Ros
 
