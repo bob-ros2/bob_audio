@@ -273,10 +273,13 @@ private:
     for (const auto & val : msg->data) {
       input_buffers_[index].push_back(val);
     }
-    // Limit buffer to 30 seconds to allow for bursts (e.g. TTS) without dropping data
-    size_t max_topic_samples = sample_rate_ * input_topic_channels_[index] * 30.0;
-    while (input_buffers_[index].size() > max_topic_samples) {
-      input_buffers_[index].pop_front();
+
+    // Safety limit: 300 seconds of audio. Clearing if exceeded (emergency brake).
+    size_t max_topic_samples = sample_rate_ * input_topic_channels_[index] * 300.0;
+    if (input_buffers_[index].size() > max_topic_samples) {
+      input_buffers_[index].clear();
+      input_active_[index] = false;
+      RCLCPP_WARN(this->get_logger(), "Buffer overflow for input %d, clearing to prevent OOM.", index);
     }
   }
 
@@ -337,18 +340,18 @@ private:
   void mix_loop()
   {
     std::vector<int32_t> mixed_data(values_per_chunk_, 0);
+    bool has_data = false;
 
+    // 1. Collect from ROS topics (locked only during buffer access)
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      bool has_data = false;
-      // 1. Collect from ROS topics
       for (int i = 0; i < input_count_; ++i) {
         int in_ch = input_topic_channels_[i];
         float gain = input_gains_[i];
         size_t required = (in_ch == 1 && channels_ == 2) ?
           static_cast<size_t>(samples_per_chunk_) : static_cast<size_t>(values_per_chunk_);
 
-        // Startup Cushion: Wait for some data to accumulate before starting the stream
+        // Startup Cushion: Wait for some data to accumulate before starting
         if (!input_active_[i]) {
           if (input_buffers_[i].size() >= required * 4) {
             input_active_[i] = true;
@@ -357,7 +360,7 @@ private:
           }
         }
 
-        // Pull if we have enough for a FULL chunk
+        // Pull samples if enough data is available
         if (input_buffers_[i].size() >= required) {
           has_data = true;
           if (in_ch == 1 && channels_ == 2) {
@@ -366,8 +369,8 @@ private:
               int16_t sample = input_buffers_[i].front();
               input_buffers_[i].pop_front();
               int32_t val = static_cast<int32_t>(sample * gain);
-              mixed_data[j * 2] += val;  // Left
-              mixed_data[j * 2 + 1] += val;  // Right
+              mixed_data[j * 2] += val;
+              mixed_data[j * 2 + 1] += val;
             }
           } else {
             // Same channel count
@@ -377,75 +380,67 @@ private:
             }
           }
         } else {
-          // If we are REALLY empty, reset the cushion for the next burst
+          // Reset status if truly empty
           if (input_buffers_[i].empty()) {
             input_active_[i] = false;
           }
         }
       }
+    }
 
-      // 2. Collect from input FIFO buffer if enabled
-      if (input_fifo_fd_ >= 0) {
-        std::lock_guard<std::mutex> lock(fifo_mutex_);
-        
-        // Startup Cushion for FIFO
-        if (!fifo_active_) {
-           if (fifo_input_buffer_.size() >= static_cast<size_t>(values_per_chunk_) * 4) {
-              fifo_active_ = true;
-           }
+    // 2. Collect from input FIFO buffer (locked only during buffer access)
+    if (input_fifo_fd_ >= 0) {
+      std::lock_guard<std::mutex> lock(fifo_mutex_);
+
+      if (!fifo_active_) {
+        if (fifo_input_buffer_.size() >= static_cast<size_t>(values_per_chunk_) * 4) {
+          fifo_active_ = true;
         }
+      }
 
-        if (fifo_active_) {
-          if (fifo_input_buffer_.size() >= static_cast<size_t>(values_per_chunk_)) {
-            has_data = true;
-            for (size_t j = 0; j < static_cast<size_t>(values_per_chunk_); ++j) {
-              mixed_data[j] += static_cast<int32_t>(fifo_input_buffer_.front() * fifo_gain_);
-              fifo_input_buffer_.pop_front();
-            }
-          } else {
-             if (fifo_input_buffer_.empty()) {
-               fifo_active_ = false; // Reset cushion if totally empty
-             }
+      if (fifo_active_) {
+        if (fifo_input_buffer_.size() >= static_cast<size_t>(values_per_chunk_)) {
+          has_data = true;
+          for (size_t j = 0; j < static_cast<size_t>(values_per_chunk_); ++j) {
+            mixed_data[j] += static_cast<int32_t>(fifo_input_buffer_.front() * fifo_gain_);
+            fifo_input_buffer_.pop_front();
+          }
+        } else {
+          if (fifo_input_buffer_.empty()) {
+            fifo_active_ = false;
           }
         }
       }
-
-      if (!has_data && !heartbeat_) {
-        return;  // Prevent silence gaps
-      }
     }
 
-    // Clipping and conversion back to int16
+    // Exit early if no data and no heartbeat to avoid overhead
+    if (!has_data && !heartbeat_) {
+      return;
+    }
+
+    // --- Post-Processing (UNLOCKED) ---
     std::vector<int16_t> final_data(values_per_chunk_);
     for (int i = 0; i < values_per_chunk_; ++i) {
       int32_t val = static_cast<int32_t>(mixed_data[i] * master_gain_);
-      if (val > 32767) {
-        val = 32767;
-      } else if (val < -32768) {
-        val = -32768;
-      }
+      if (val > 32767) {val = 32767;} else if (val < -32768) {val = -32768;}
       final_data[i] = static_cast<int16_t>(val);
     }
 
-    // --- Outputs ---
-
-    // 1. Topic Output
+    // --- Outputs (UNLOCKED) ---
     if (pub_) {
       auto msg = std_msgs::msg::Int16MultiArray();
       msg.data = final_data;
       pub_->publish(msg);
     }
 
-    // 2. FIFO Output
     if (output_fifo_fd_ >= 0) {
       if (write(output_fifo_fd_, final_data.data(), values_per_chunk_ * 2) < 0) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
-           RCLCPP_DEBUG(this->get_logger(), "FIFO write error: %s", strerror(errno));
+          RCLCPP_DEBUG(this->get_logger(), "FIFO write error: %s", strerror(errno));
         }
       }
     }
 
-    // 3. Stdout Output (FFmpeg pipe)
     if (enable_stdout_output_) {
       write(STDOUT_FILENO, final_data.data(), values_per_chunk_ * 2);
     }
