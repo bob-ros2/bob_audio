@@ -204,7 +204,7 @@ public:
 
       descriptor.description = "Number of channels for " + topic + " (Default: same as mixer).";
       int in_ch = this->declare_parameter(
-        topic + "_channels", get_env(env_var, channels_), descriptor);
+        topic + "_channels", get_env(env_var.c_str(), channels_), descriptor);
       input_topic_channels_.push_back(in_ch);
 
       subs_.push_back(
