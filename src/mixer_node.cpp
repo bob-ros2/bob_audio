@@ -203,7 +203,8 @@ public:
       std::string env_var = "MIXER_IN" + std::to_string(i) + "_CHANNELS";
 
       descriptor.description = "Number of channels for " + topic + " (Default: same as mixer).";
-      int in_ch = this->declare_parameter(topic + "_channels", get_env(env_var, channels_), descriptor);
+      int in_ch = this->declare_parameter(
+        topic + "_channels", get_env(env_var, channels_), descriptor);
       input_topic_channels_.push_back(in_ch);
 
       subs_.push_back(
