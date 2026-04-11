@@ -265,8 +265,8 @@ private:
         for (size_t i = 0; i < samples_read; ++i) {
           fifo_input_buffer_.push_back(read_buffer[i]);
         }
-        // Cap buffer to 300 seconds (prevent OOM)
-        size_t max_fifo_samples = sample_rate_ * channels_ * 300.0;
+        // Cap buffer to 600 seconds (prevent OOM)
+        size_t max_fifo_samples = sample_rate_ * channels_ * 600.0;
         if (fifo_input_buffer_.size() > max_fifo_samples) {
           fifo_input_buffer_.clear();
           fifo_active_ = false;
@@ -286,8 +286,8 @@ private:
       input_buffers_[index].push_back(val);
     }
 
-    // Safety limit: 300 seconds of audio. Clearing if exceeded (emergency brake).
-    size_t max_topic_samples = sample_rate_ * input_topic_channels_[index] * 300.0;
+    // Safety limit: 600 seconds of audio. Clearing if exceeded (emergency brake).
+    size_t max_topic_samples = sample_rate_ * input_topic_channels_[index] * 600.0;
     if (input_buffers_[index].size() > max_topic_samples) {
       input_buffers_[index].clear();
       input_active_[index] = false;
