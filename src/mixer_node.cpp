@@ -240,13 +240,13 @@ public:
             this->topic_callback(i, msg);
           }, sub_options));
       input_buffers_.emplace_back();
- 
+
       std::string gain_env = "MIXER_IN" + std::to_string(i) + "_GAIN";
       descriptor.description = "Gain multiplier for " + topic + " (Default: 0.6).";
       float initial_gain = this->declare_parameter(
         topic + "_gain", get_env(gain_env.c_str(), 0.6), descriptor);
       input_gains_.push_back(initial_gain);
- 
+
       input_active_.push_back(false);
     }
 
