@@ -77,6 +77,22 @@ static int get_env(const char * name, int default_val)
   }
 }
 
+/**
+ * @brief Gets an environment variable as a double.
+ */
+static double get_env(const char * name, double default_val)
+{
+  const char * val = std::getenv(name);
+  if (!val) {
+    return default_val;
+  }
+  try {
+    return std::stod(val);
+  } catch (...) {
+    return default_val;
+  }
+}
+
 class MixerNode : public rclcpp::Node
 {
 public:
@@ -151,6 +167,16 @@ public:
     descriptor.description = "Number of input topics (in0, in1, ...) (Default: 4).";
     input_count_ = this->declare_parameter("input_count", 4, descriptor);
 
+    descriptor.description = "Master gain multiplier (Default: 0.6, Env: MIXER_MASTER_GAIN).";
+    master_gain_ = this->declare_parameter(
+      "master_gain",
+      get_env("MIXER_MASTER_GAIN", 0.6), descriptor);
+
+    descriptor.description = "FIFO input gain multiplier (Default: 0.6, Env: MIXER_FIFO_GAIN).";
+    fifo_gain_ = this->declare_parameter(
+      "fifo_gain",
+      get_env("MIXER_FIFO_GAIN", 0.6), descriptor);
+
     // --- Internal State ---
     samples_per_chunk_ = (sample_rate_ * chunk_ms) / 1000;
     values_per_chunk_ = samples_per_chunk_ * channels_;
@@ -214,7 +240,13 @@ public:
             this->topic_callback(i, msg);
           }, sub_options));
       input_buffers_.emplace_back();
-      input_gains_.push_back(1.0f);
+ 
+      std::string gain_env = "MIXER_IN" + std::to_string(i) + "_GAIN";
+      descriptor.description = "Gain multiplier for " + topic + " (Default: 0.6).";
+      float initial_gain = this->declare_parameter(
+        topic + "_gain", get_env(gain_env.c_str(), 0.6), descriptor);
+      input_gains_.push_back(initial_gain);
+ 
       input_active_.push_back(false);
     }
 
